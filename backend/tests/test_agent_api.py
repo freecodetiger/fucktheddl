@@ -4,6 +4,7 @@ import subprocess
 from fastapi.testclient import TestClient
 
 from fucktheddl_agent.api import create_app
+from fucktheddl_agent.workflow import classify_intent
 
 
 def make_client(tmp_path, monkeypatch):
@@ -71,6 +72,23 @@ def test_deadline_request_returns_todo_proposal_not_calendar_event(tmp_path, mon
     assert proposal["todo_patch"]["due"] == "2026-05-01"
 
 
+def test_local_rules_override_uncertain_model_classification_for_clear_deadline():
+    state = classify_intent(
+        {
+            "text": "明天截止，完成安卓后端冒烟测试",
+            "session_id": "test",
+            "timezone": "Asia/Shanghai",
+            "model_extraction": {
+                "commitment_type": "clarify",
+                "title": "完成安卓后端冒烟测试",
+            },
+        },
+    )
+
+    assert state["commitment_type"] == "todo"
+    assert state["due_label"] == "Due tomorrow"
+
+
 def test_confirming_unknown_proposal_does_not_write_anything(tmp_path, monkeypatch):
     client = make_client(tmp_path, monkeypatch)
     response = client.post("/agent/confirm/missing-proposal")
@@ -104,6 +122,29 @@ def test_confirming_schedule_proposal_writes_month_file_and_git_commit(tmp_path,
         text=True,
     )
     assert body["commit_hash"] in git_log
+
+
+def test_commitments_returns_confirmed_schedule_after_agent_confirmation(tmp_path, monkeypatch):
+    client = make_client(tmp_path, monkeypatch)
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "明天下午三点去电玩城",
+            "session_id": "confirm-arcade",
+        },
+    )
+    proposal_id = response.json()["proposal"]["id"]
+    confirm = client.post(f"/agent/confirm/{proposal_id}")
+    assert confirm.status_code == 200
+
+    commitments = client.get("/commitments")
+
+    assert commitments.status_code == 200
+    body = commitments.json()
+    assert body["events"][0]["title"] == "去电玩城"
+    assert body["events"][0]["start"] == "2026-04-30T15:00:00+08:00"
+    assert body["events"][0]["status"] == "confirmed"
+    assert body["todos"] == []
 
 
 def test_confirming_todo_proposal_writes_todo_month_file(tmp_path, monkeypatch):
@@ -153,7 +194,6 @@ def test_undo_creates_reverse_business_patch_without_git_revert(tmp_path, monkey
 def test_asr_session_requires_aliyun_configuration(tmp_path, monkeypatch):
     client = make_client(tmp_path, monkeypatch)
     monkeypatch.delenv("ALIYUN_API_KEY", raising=False)
-    monkeypatch.delenv("ALIYUN_APP_KEY", raising=False)
 
     response = client.get("/asr/session")
 
@@ -163,15 +203,14 @@ def test_asr_session_requires_aliyun_configuration(tmp_path, monkeypatch):
 
 def test_asr_session_returns_realtime_fun_asr_config(tmp_path, monkeypatch):
     client = make_client(tmp_path, monkeypatch)
-    monkeypatch.setenv("ALIYUN_API_KEY", "test-aliyun-token")
-    monkeypatch.setenv("ALIYUN_APP_KEY", "test-app-key")
+    monkeypatch.setenv("ALIYUN_API_KEY", "test-aliyun-api-key")
 
     response = client.get("/asr/session")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["app_key"] == "test-app-key"
-    assert body["token"] == "test-aliyun-token"
+    assert body["api_key"] == "test-aliyun-api-key"
+    assert body["url"] == "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
     assert body["model"] == "fun-asr-realtime-2025-09-15"
     assert body["sample_rate"] == 16000
     assert body["service_type"] == 4

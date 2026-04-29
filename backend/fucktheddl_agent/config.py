@@ -21,7 +21,6 @@ class ModelSettings:
 @dataclass(frozen=True)
 class AsrSettings:
     api_key: str | None
-    app_key: str | None
     url: str
     model: str = "fun-asr-realtime-2025-09-15"
     sample_rate: int = 16000
@@ -29,7 +28,7 @@ class AsrSettings:
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key and self.app_key)
+        return bool(self.api_key)
 
     @property
     def expires_at(self) -> str:
@@ -53,7 +52,6 @@ def load_settings(data_root: Path | None = None) -> AppSettings:
     )
     asr = AsrSettings(
         api_key=os.environ.get("ALIYUN_API_KEY"),
-        app_key=os.environ.get("ALIYUN_APP_KEY"),
-        url=os.environ.get("ALIYUN_ASR_URL", "wss://nls-gateway.cn-shanghai.aliyuncs.com:443/ws/v1"),
+        url=os.environ.get("ALIYUN_ASR_URL", "wss://dashscope.aliyuncs.com/api-ws/v1/inference"),
     )
     return AppSettings(data_root=root, model=model, asr=asr)

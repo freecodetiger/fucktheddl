@@ -12,6 +12,7 @@ data class ScheduleShellState(
 
 data class ScheduleTab(
     val label: String,
+    val destination: TabDestination,
 )
 
 data class ScheduleEvent(
@@ -63,6 +64,13 @@ enum class AgentStepState {
     Done,
     Active,
     Waiting,
+}
+
+enum class TabDestination {
+    Today,
+    Calendar,
+    Todo,
+    Agent,
 }
 
 enum class ScheduleRisk {

@@ -85,9 +85,36 @@ class ApplyResponse(BaseModel):
     commit_hash: str
 
 
+class CommitmentEvent(BaseModel):
+    id: str
+    title: str
+    start: str
+    end: str
+    timezone: str
+    status: CommitmentStatus
+    location: str = ""
+    notes: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+
+class CommitmentTodo(BaseModel):
+    id: str
+    title: str
+    due: str
+    timezone: str = "Asia/Shanghai"
+    status: CommitmentStatus
+    priority: Literal["low", "medium", "high"]
+    notes: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+
+class CommitmentsResponse(BaseModel):
+    events: list[CommitmentEvent] = Field(default_factory=list)
+    todos: list[CommitmentTodo] = Field(default_factory=list)
+
+
 class AsrSessionResponse(BaseModel):
-    app_key: str
-    token: str
+    api_key: str
     url: str
     model: Literal["fun-asr-realtime-2025-09-15"]
     sample_rate: int

@@ -21,11 +21,10 @@ export OPENAI_BASE_URL="https://your-codex-gateway.example/v1"
 export OPENAI_MODEL="gpt-5.4"
 ```
 
-Aliyun realtime ASR configuration stays on the backend:
+Aliyun realtime ASR configuration stays on the backend. Fun-ASR realtime Android SDK uses the DashScope API key as its `apikey` initialization parameter.
 
 ```bash
 export ALIYUN_API_KEY="..."
-export ALIYUN_APP_KEY="..."
 ```
 
 Android debug builds read the private backend address from untracked `local.properties`:

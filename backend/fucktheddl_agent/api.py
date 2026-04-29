@@ -9,6 +9,7 @@ from fucktheddl_agent.schemas import (
     AgentResponse,
     ApplyResponse,
     AsrSessionResponse,
+    CommitmentsResponse,
     HealthResponse,
     ModelConfigResponse,
 )
@@ -35,6 +36,10 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def propose(request: AgentRequest) -> AgentResponse:
         return agent_service.propose(request)
 
+    @router.get("/commitments", response_model=CommitmentsResponse)
+    def commitments() -> CommitmentsResponse:
+        return agent_service.commitments()
+
     @router.post("/agent/confirm/{proposal_id}", response_model=ApplyResponse)
     def confirm(proposal_id: str) -> ApplyResponse:
         result = agent_service.confirm(proposal_id)
@@ -55,8 +60,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         if not current_settings.asr.configured:
             raise HTTPException(status_code=503, detail="Aliyun ASR credentials are not configured")
         return AsrSessionResponse(
-            app_key=current_settings.asr.app_key or "",
-            token=current_settings.asr.api_key or "",
+            api_key=current_settings.asr.api_key or "",
             url=current_settings.asr.url,
             model="fun-asr-realtime-2025-09-15",
             sample_rate=current_settings.asr.sample_rate,

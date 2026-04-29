@@ -74,6 +74,26 @@ class ScheduleStore:
                     return ApplyResult(commitment_id, commitment_type, file_path, commit_hash)
         return None
 
+    def list_commitments(self) -> dict[str, list[dict[str, Any]]]:
+        events = []
+        for file_path in (self.root / "schedules").glob("*.json"):
+            events.extend(
+                item
+                for item in self._load_collection(file_path)
+                if item.get("status") == "confirmed"
+            )
+        events.sort(key=lambda item: item.get("start", ""))
+
+        todos = []
+        for file_path in (self.root / "todos").glob("*.json"):
+            todos.extend(
+                item
+                for item in self._load_collection(file_path)
+                if item.get("status") in {"active", "done"}
+            )
+        todos.sort(key=lambda item: (item.get("due", ""), item.get("title", "")))
+        return {"events": events, "todos": todos}
+
     def _schedule_record(self, proposal: Proposal, source_text: str) -> dict[str, Any]:
         patch = proposal.schedule_patch
         assert patch is not None

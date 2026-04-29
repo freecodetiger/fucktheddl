@@ -13,6 +13,7 @@ import com.alibaba.idst.nui.INativeNuiCallback
 import com.alibaba.idst.nui.KwsResult
 import com.alibaba.idst.nui.NativeNui
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AliyunRealtimeAsrClient(
@@ -35,7 +36,7 @@ class AliyunRealtimeAsrClient(
                 nui.setParams(buildRealtimeParams(session).toString())
                 nui.startDialog(Constants.VadMode.TYPE_P2T, "")
             }.onFailure { error ->
-                callback.onError(error.message ?: "Failed to start speech recognition")
+                callback.onError(error.message ?: "启动语音识别失败")
             }
         }.start()
     }
@@ -55,14 +56,14 @@ class AliyunRealtimeAsrClient(
 
     private fun ensurePermission() {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-        check(granted == PackageManager.PERMISSION_GRANTED) { "Microphone permission is required" }
+        check(granted == PackageManager.PERMISSION_GRANTED) { "需要麦克风权限" }
     }
 
     private fun initializeIfNeeded(session: JSONObject) {
         if (initialized) return
+        ensureWorkspaceAssets()
         val initParams = JSONObject()
-            .put("app_key", session.getString("app_key"))
-            .put("token", session.getString("token"))
+            .put("apikey", session.getString("api_key"))
             .put("url", session.getString("url"))
             .put("device_id", "android_device")
             .put("workspace", context.filesDir.absolutePath)
@@ -70,11 +71,45 @@ class AliyunRealtimeAsrClient(
         val result = nui.initialize(
             nuiCallback,
             initParams.toString(),
-            Constants.LogLevel.LOG_LEVEL_INFO,
+            Constants.LogLevel.LOG_LEVEL_ERROR,
             false,
         )
-        check(result == 0) { "Aliyun ASR initialize failed: $result" }
+        check(result == 0) { "阿里云语音识别初始化失败：$result" }
         initialized = true
+    }
+
+    private fun ensureWorkspaceAssets() {
+        val workspace = context.filesDir
+        val copyList = context.assets.open("copylist.txt")
+            .bufferedReader()
+            .useLines { lines ->
+                lines.map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .toList()
+            }
+        copyList.forEach { assetPath ->
+            copyAssetPath(assetPath, File(workspace, assetPath))
+        }
+    }
+
+    private fun copyAssetPath(
+        assetPath: String,
+        target: File,
+    ) {
+        val children = context.assets.list(assetPath).orEmpty()
+        if (children.isNotEmpty()) {
+            target.mkdirs()
+            children.forEach { child ->
+                copyAssetPath("$assetPath/$child", File(target, child))
+            }
+            return
+        }
+        target.parentFile?.mkdirs()
+        context.assets.open(assetPath).use { input ->
+            target.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
     }
 
     private fun buildRealtimeParams(session: JSONObject): JSONObject {
@@ -97,16 +132,16 @@ class AliyunRealtimeAsrClient(
             kwsResult: KwsResult?,
             asrResult: AsrResult?,
         ) {
-            val text = asrResult?.asrResult.orEmpty()
+            val text = extractAsrText(asrResult?.asrResult.orEmpty())
             when (event) {
-                Constants.NuiEvent.EVENT_ASR_PARTIAL_RESULT -> callback?.onPartial(text)
+                Constants.NuiEvent.EVENT_ASR_PARTIAL_RESULT -> if (text.isNotBlank()) callback?.onPartial(text) else Unit
                 Constants.NuiEvent.EVENT_SENTENCE_END,
                 Constants.NuiEvent.EVENT_ASR_RESULT,
-                -> callback?.onFinal(text)
+                -> if (text.isNotBlank()) callback?.onFinal(text) else Unit
                 Constants.NuiEvent.EVENT_ASR_ERROR,
                 Constants.NuiEvent.EVENT_MIC_ERROR,
                 Constants.NuiEvent.EVENT_DIALOG_ERROR,
-                -> callback?.onError("ASR error: $resultCode")
+                -> callback?.onError("语音识别错误：$resultCode")
                 else -> Unit
             }
         }
@@ -137,7 +172,7 @@ class AliyunRealtimeAsrClient(
             AudioFormat.ENCODING_PCM_16BIT,
         )
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            callback?.onError("Microphone permission is required")
+            callback?.onError("需要麦克风权限")
             return
         }
         audioRecord = AudioRecord(
@@ -161,3 +196,13 @@ class AliyunRealtimeAsrClient(
     }
 }
 
+internal fun extractAsrText(rawResult: String): String {
+    if (rawResult.isBlank()) return ""
+    val textMatch = """"text"\s*:\s*"((?:\\.|[^"\\])*)"""".toRegex().find(rawResult)
+    return textMatch?.groupValues?.getOrNull(1)
+        ?.replace("\\\"", "\"")
+        ?.replace("\\n", "\n")
+        ?.replace("\\t", "\t")
+        ?.takeIf { it.isNotBlank() }
+        ?: rawResult
+}

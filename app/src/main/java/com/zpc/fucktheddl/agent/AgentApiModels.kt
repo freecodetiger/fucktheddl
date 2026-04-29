@@ -32,3 +32,27 @@ data class AgentApplyResult(
     val commitmentId: String,
     val error: String?,
 )
+
+data class AgentCommitmentsPayload(
+    val events: List<BackendScheduleEvent>,
+    val todos: List<BackendTodoItem>,
+)
+
+data class BackendScheduleEvent(
+    val title: String,
+    val start: String,
+    val end: String,
+    val status: String,
+    val location: String,
+    val notes: String,
+    val tags: List<String>,
+)
+
+data class BackendTodoItem(
+    val title: String,
+    val due: String,
+    val status: String,
+    val priority: String,
+    val notes: String,
+    val tags: List<String>,
+)

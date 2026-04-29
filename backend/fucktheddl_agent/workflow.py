@@ -48,17 +48,26 @@ def build_agent_graph():
 def classify_intent(state: AgentGraphState) -> AgentGraphState:
     text = state["text"]
     model_extraction = state.get("model_extraction")
+    heuristic = _heuristic_classification(text)
     if model_extraction:
         commitment_type = str(model_extraction.get("commitment_type", "clarify"))
+        if commitment_type not in {"schedule", "todo", "clarify"}:
+            commitment_type = "clarify"
+        if commitment_type == "clarify" and heuristic["commitment_type"] != "clarify":
+            commitment_type = heuristic["commitment_type"]
         return {
             **state,
-            "commitment_type": commitment_type if commitment_type in {"schedule", "todo", "clarify"} else "clarify",
+            "commitment_type": commitment_type,
             "title": str(model_extraction.get("title") or _compact_title(text)),
-            "time_range": str(model_extraction.get("time") or "") or None,
-            "due_label": str(model_extraction.get("due") or "") or None,
+            "time_range": str(model_extraction.get("time") or "") or heuristic["time_range"],
+            "due_label": str(model_extraction.get("due") or "") or heuristic["due_label"],
             "priority": str(model_extraction.get("priority") or "medium"),
         }
 
+    return {**state, **heuristic}
+
+
+def _heuristic_classification(text: str) -> AgentGraphState:
     has_time = any(token in text for token in ("点", ":", "上午", "下午", "晚上", "早上"))
     has_deadline = any(token in text.lower() for token in ("ddl", "截止", "前", "完成", "交", "due"))
 
@@ -76,7 +85,6 @@ def classify_intent(state: AgentGraphState) -> AgentGraphState:
         due_label = None
 
     return {
-        **state,
         "commitment_type": commitment_type,
         "title": _compact_title(text),
         "time_range": time_range,
@@ -241,4 +249,19 @@ def _plus_one_hour(start: str) -> str:
 
 def _compact_title(text: str) -> str:
     cleaned = text.strip().replace("，", " ").replace(",", " ")
+    for token in (
+        "明天下午三点",
+        "明天下午3点",
+        "明天上午九点",
+        "明天上午9点",
+        "明天晚上",
+        "明天",
+        "下午三点",
+        "下午3点",
+        "上午九点",
+        "上午9点",
+        "晚上",
+    ):
+        cleaned = cleaned.replace(token, " ")
+    cleaned = " ".join(cleaned.split())
     return cleaned[:48]

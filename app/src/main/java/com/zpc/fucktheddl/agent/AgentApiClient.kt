@@ -28,7 +28,7 @@ class AgentApiClient(
                 error = null,
             )
         } catch (error: Exception) {
-            AgentSubmitResult(proposal = null, error = error.message ?: "Agent request failed")
+            AgentSubmitResult(proposal = null, error = error.message ?: "智能体请求失败")
         }
     }
 
@@ -38,6 +38,15 @@ class AgentApiClient(
 
     fun undo(commitmentId: String): AgentApplyResult {
         return apply("agent/undo/$commitmentId")
+    }
+
+    fun commitments(): AgentCommitmentsPayload {
+        val connection = URL(config.normalizedBaseUrl + "commitments").openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 5000
+        connection.readTimeout = 10000
+        val text = connection.inputStream.bufferedReader().readText()
+        return parseCommitments(JSONObject(text))
     }
 
     fun asrSession(): JSONObject {
@@ -82,6 +91,41 @@ class AgentApiClient(
             AgentApplyResult(status = "failed", commitmentId = "", error = error.message)
         }
     }
+}
+
+private fun parseCommitments(response: JSONObject): AgentCommitmentsPayload {
+    val eventsJson = response.getJSONArray("events")
+    val events = List(eventsJson.length()) { index ->
+        val item = eventsJson.getJSONObject(index)
+        BackendScheduleEvent(
+            title = item.getString("title"),
+            start = item.getString("start"),
+            end = item.getString("end"),
+            status = item.optString("status", "confirmed"),
+            location = item.optString("location", ""),
+            notes = item.optString("notes", ""),
+            tags = item.optStringList("tags"),
+        )
+    }
+    val todosJson = response.getJSONArray("todos")
+    val todos = List(todosJson.length()) { index ->
+        val item = todosJson.getJSONObject(index)
+        BackendTodoItem(
+            title = item.getString("title"),
+            due = item.getString("due"),
+            status = item.optString("status", "active"),
+            priority = item.optString("priority", "medium"),
+            notes = item.optString("notes", ""),
+            tags = item.optStringList("tags"),
+        )
+    }
+    return AgentCommitmentsPayload(events = events, todos = todos)
+}
+
+private fun JSONObject.optStringList(name: String): List<String> {
+    val array = optJSONArray(name) ?: return emptyList()
+    return List(array.length()) { index -> array.optString(index) }
+        .filter { it.isNotBlank() }
 }
 
 private fun String.toCommitmentType(): CommitmentType {

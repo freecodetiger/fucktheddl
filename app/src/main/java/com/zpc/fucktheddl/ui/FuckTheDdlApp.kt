@@ -32,19 +32,26 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zpc.fucktheddl.agent.AgentApiClient
 import com.zpc.fucktheddl.agent.AgentProposal
+import com.zpc.fucktheddl.agent.mapCommitmentsToScheduleState
 import com.zpc.fucktheddl.schedule.AgentState
 import com.zpc.fucktheddl.schedule.AgentStepState
 import com.zpc.fucktheddl.schedule.OpenSlot
@@ -53,6 +60,7 @@ import com.zpc.fucktheddl.schedule.AgentProposal as ScheduleAgentProposal
 import com.zpc.fucktheddl.schedule.ScheduleRisk
 import com.zpc.fucktheddl.schedule.ScheduleShellState
 import com.zpc.fucktheddl.schedule.ScheduleTab
+import com.zpc.fucktheddl.schedule.TabDestination
 import com.zpc.fucktheddl.schedule.TodoItem
 import com.zpc.fucktheddl.schedule.TodoPriority
 import com.zpc.fucktheddl.voice.RealtimeAsrCallback
@@ -73,6 +81,28 @@ fun FuckTheDdlApp(
     asrClient: RealtimeAsrClient? = null,
 ) {
     var selectedTab by remember { mutableStateOf(initialState.selectedTab) }
+    var shellState by remember { mutableStateOf(initialState) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    fun refreshCommitments() {
+        val client = agentApiClient ?: return
+        Thread {
+            runCatching {
+                mapCommitmentsToScheduleState(client.commitments())
+            }.onSuccess { commitments ->
+                mainHandler.post {
+                    shellState = shellState.copy(
+                        events = commitments.events.ifEmpty { initialState.events },
+                        todos = commitments.todos.ifEmpty { initialState.todos },
+                    )
+                }
+            }
+        }.start()
+    }
+
+    LaunchedEffect(agentApiClient) {
+        refreshCommitments()
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -80,6 +110,7 @@ fun FuckTheDdlApp(
             AgentComposer(
                 agentApiClient = agentApiClient,
                 asrClient = asrClient,
+                onCommitmentsChanged = ::refreshCommitments,
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
@@ -106,17 +137,17 @@ fun FuckTheDdlApp(
                 onTabSelected = { selectedTab = it },
             )
 
-            when (selectedTab.label) {
-                "Today" -> TodaySurface(
-                    events = initialState.events,
-                    todos = initialState.todos,
-                    openSlots = initialState.openSlots,
-                    agentState = initialState.agentState,
+            when (selectedTab.destination) {
+                TabDestination.Today -> TodaySurface(
+                    events = shellState.events,
+                    todos = shellState.todos,
+                    openSlots = shellState.openSlots,
+                    agentState = shellState.agentState,
                 )
 
-                "Calendar" -> CalendarSurface(events = initialState.events)
-                "Todo" -> TodoSurface(todos = initialState.todos)
-                "Agent" -> AgentSurface(agentState = initialState.agentState)
+                TabDestination.Calendar -> CalendarSurface(events = shellState.events)
+                TabDestination.Todo -> TodoSurface(todos = shellState.todos)
+                TabDestination.Agent -> AgentSurface(agentState = shellState.agentState)
             }
         }
     }
@@ -145,7 +176,7 @@ private fun Header(
                     letterSpacing = 0.sp,
                 )
                 Text(
-                    text = "Schedules are attendance. Todos are obligations. The Agent keeps them honest.",
+                    text = "日程是必须在特定时间参与的事；待办是在期限前完成的事。智能体负责把它们分清楚。",
                     color = Muted,
                     fontSize = 14.sp,
                     lineHeight = 20.sp,
@@ -209,11 +240,11 @@ private fun TodaySurface(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SummaryStrip(events = events, todos = todos)
-        SectionTitle("Next commitments")
+        SectionTitle("接下来要处理")
         events.take(2).forEach { event -> EventCard(event = event) }
-        SectionTitle("Deadline work")
+        SectionTitle("截止事项")
         todos.filter { !it.done }.take(2).forEach { todo -> TodoCard(todo = todo) }
-        SectionTitle("Open slots")
+        SectionTitle("空档")
         openSlots.forEach { slot -> OpenSlotCard(slot = slot) }
         agentState.pendingProposal?.let { ProposalCard(proposal = it) }
     }
@@ -230,9 +261,9 @@ private fun SummaryStrip(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        MetricPill(label = "Timed", value = events.size.toString(), color = Accent)
-        MetricPill(label = "Todo", value = todos.count { !it.done }.toString(), color = Risk)
-        MetricPill(label = "Done", value = todos.count { it.done }.toString(), color = Success)
+        MetricPill(label = "日程", value = events.size.toString(), color = Accent)
+        MetricPill(label = "待办", value = todos.count { !it.done }.toString(), color = Risk)
+        MetricPill(label = "完成", value = todos.count { it.done }.toString(), color = Success)
     }
 }
 
@@ -261,9 +292,9 @@ private fun MetricPill(
 @Composable
 private fun CalendarSurface(events: List<ScheduleEvent>) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle("Calendar")
+        SectionTitle("日历")
         Text(
-            text = "Only time-bound attendance belongs here. If it can be done any time before a deadline, it belongs in Todo.",
+            text = "只有必须在特定时间参与的事情才放在这里。只要能在截止前任意时间完成，就应该放进待办。",
             color = Muted,
             fontSize = 14.sp,
             lineHeight = 20.sp,
@@ -275,9 +306,9 @@ private fun CalendarSurface(events: List<ScheduleEvent>) {
 @Composable
 private fun TodoSurface(todos: List<TodoItem>) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle("Todo")
+        SectionTitle("待办")
         Text(
-            text = "Todo tracks deadline-bound work. The Agent may schedule focus blocks for it, but the Todo itself is not a calendar event.",
+            text = "待办用于追踪有截止期限的任务。智能体可以为它安排专注时段，但待办本身不是日历事件。",
             color = Muted,
             fontSize = 14.sp,
             lineHeight = 20.sp,
@@ -289,9 +320,9 @@ private fun TodoSurface(todos: List<TodoItem>) {
 @Composable
 private fun AgentSurface(agentState: AgentState) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle("Agent chain")
+        SectionTitle("智能体链路")
         Text(
-            text = "Writes are confirmation-gated. The Agent can classify, validate, and propose, but durable JSON changes wait for explicit approval.",
+            text = "所有写入都需要确认。智能体可以分类、校验并提出方案，但持久化 JSON 修改必须等你明确批准。",
             color = Muted,
             fontSize = 14.sp,
             lineHeight = 20.sp,
@@ -411,14 +442,14 @@ private fun ProposalCard(proposal: ScheduleAgentProposal) {
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                     shape = RoundedCornerShape(6.dp),
                 ) {
-                    Text("Confirm")
+                    Text("确认")
                 }
                 Button(
                     onClick = {},
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F3F3F)),
                     shape = RoundedCornerShape(6.dp),
                 ) {
-                    Text("Edit")
+                    Text("编辑")
                 }
             }
         }
@@ -450,7 +481,15 @@ private fun AgentStepRow(
                 .background(color, RoundedCornerShape(999.dp)),
         )
         Text(text = label, color = Ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        Text(text = state.name.lowercase(), color = color, fontSize = 12.sp)
+        Text(text = state.localizedLabel(), color = color, fontSize = 12.sp)
+    }
+}
+
+private fun AgentStepState.localizedLabel(): String {
+    return when (this) {
+        AgentStepState.Done -> "已完成"
+        AgentStepState.Active -> "进行中"
+        AgentStepState.Waiting -> "等待"
     }
 }
 
@@ -485,29 +524,34 @@ private fun OpenSlotCard(slot: OpenSlot) {
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun AgentComposer(
     agentApiClient: AgentApiClient?,
     asrClient: RealtimeAsrClient?,
+    onCommitmentsChanged: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var inputText by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("Hold to speak") }
+    var status by remember { mutableStateOf("按住说话") }
     var proposal by remember { mutableStateOf<AgentProposal?>(null) }
     var lastCommitmentId by remember { mutableStateOf<String?>(null) }
+    var isListening by remember { mutableStateOf(false) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     fun submit(value: String) {
         if (value.isBlank() || agentApiClient == null) return
-        status = "Submitting"
+        status = "正在提交"
         Thread {
             val result = agentApiClient.propose(value)
             mainHandler.post {
                 if (result.proposal != null) {
                     proposal = result.proposal
-                    status = "Proposal ready"
+                    status = "方案已生成"
                 } else {
-                    status = result.error ?: "Agent unavailable"
+                    status = result.error ?: "智能体暂不可用"
                 }
             }
         }.start()
@@ -527,30 +571,33 @@ private fun AgentComposer(
                                     mainHandler.post {
                                         proposal = null
                                         lastCommitmentId = result?.commitmentId?.takeIf { it.isNotBlank() }
-                                        status = result?.error ?: "Confirmed"
+                                        status = result?.error ?: "已确认"
+                                        if (result?.error == null) {
+                                            onCommitmentsChanged()
+                                        }
                                     }
                                 }.start()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Accent),
                             shape = RoundedCornerShape(6.dp),
-                        ) { Text("Confirm") }
+                        ) { Text("确认") }
                         Button(
                             onClick = {
                                 inputText = current.title
                                 proposal = null
-                                status = "Editing"
+                                status = "正在编辑"
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F3F3F)),
                             shape = RoundedCornerShape(6.dp),
-                        ) { Text("Edit") }
+                        ) { Text("编辑") }
                         Button(
                             onClick = {
                                 proposal = null
-                                status = "Cancelled"
+                                status = "已取消"
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Danger),
                             shape = RoundedCornerShape(6.dp),
-                        ) { Text("Cancel") }
+                        ) { Text("取消") }
                     }
                 }
             }
@@ -562,20 +609,23 @@ private fun AgentComposer(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Last change committed", color = Success, fontSize = 12.sp)
+                    Text("上次修改已提交", color = Success, fontSize = 12.sp)
                     Button(
                         onClick = {
                             Thread {
                                 val result = agentApiClient?.undo(commitmentId)
                                 mainHandler.post {
-                                    status = result?.error ?: "Undone"
+                                    status = result?.error ?: "已撤销"
                                     lastCommitmentId = null
+                                    if (result?.error == null) {
+                                        onCommitmentsChanged()
+                                    }
                                 }
                             }.start()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Risk),
                         shape = RoundedCornerShape(6.dp),
-                    ) { Text("Undo") }
+                    ) { Text("撤销") }
                 }
             }
         }
@@ -586,8 +636,23 @@ private fun AgentComposer(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Add schedule or todo") },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                            keyboardController?.show()
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = {
+                                focusRequester.requestFocus()
+                                keyboardController?.show()
+                            },
+                        )
+                    },
+                placeholder = { Text("添加日程或待办") },
                 singleLine = true,
                 shape = RoundedCornerShape(6.dp),
             )
@@ -596,50 +661,88 @@ private fun AgentComposer(
                 colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 shape = RoundedCornerShape(6.dp),
             ) {
-                Text("Send")
+                Text("发送")
             }
-            Button(
-                onClick = {},
-                modifier = Modifier.pointerInput(asrClient) {
-                    detectTapGestures(
-                        onPress = {
-                            if (asrClient == null) {
-                                status = "Voice unavailable"
-                                return@detectTapGestures
+            HoldToSpeakButton(
+                enabled = asrClient != null,
+                listening = isListening,
+                onPressStart = {
+                    val client = asrClient
+                    if (client == null) {
+                        status = "语音暂不可用"
+                    } else {
+                        keyboardController?.hide()
+                        isListening = true
+                        status = "正在听"
+                        client.start(object : RealtimeAsrCallback {
+                            override fun onPartial(text: String) {
+                                mainHandler.post {
+                                    inputText = text
+                                    status = "正在听"
+                                }
                             }
-                            status = "Listening"
-                            asrClient.start(object : RealtimeAsrCallback {
-                                override fun onPartial(text: String) {
-                                    mainHandler.post {
-                                        inputText = text
-                                        status = "Listening"
-                                    }
-                                }
 
-                                override fun onFinal(text: String) {
-                                    mainHandler.post {
-                                        inputText = text
-                                        status = "Recognized"
-                                        submit(text)
-                                    }
+                            override fun onFinal(text: String) {
+                                mainHandler.post {
+                                    inputText = text
+                                    status = "已识别"
+                                    submit(text)
                                 }
+                            }
 
-                                override fun onError(message: String) {
-                                    mainHandler.post { status = message }
+                            override fun onError(message: String) {
+                                mainHandler.post {
+                                    isListening = false
+                                    status = message
                                 }
-                            })
-                            tryAwaitRelease()
-                            status = "Finishing"
-                            asrClient.stop()
-                        },
-                    )
+                            }
+                        })
+                    }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Risk),
-                shape = RoundedCornerShape(6.dp),
-            ) {
-                Text("Hold")
-            }
+                onPressEnd = {
+                    val client = asrClient
+                    if (client != null && isListening) {
+                        isListening = false
+                        status = "正在结束"
+                        client.stop()
+                    }
+                },
+            )
         }
         Text(status, color = Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun HoldToSpeakButton(
+    enabled: Boolean,
+    listening: Boolean,
+    onPressStart: () -> Unit,
+    onPressEnd: () -> Unit,
+) {
+    Surface(
+        color = if (listening) Danger else Risk,
+        shape = RoundedCornerShape(6.dp),
+        modifier = Modifier.pointerInput(enabled) {
+            detectTapGestures(
+                onPress = {
+                    if (!enabled) return@detectTapGestures
+                    onPressStart()
+                    try {
+                        tryAwaitRelease()
+                    } finally {
+                        onPressEnd()
+                    }
+                },
+            )
+        },
+    ) {
+        Text(
+            text = if (listening) "松开" else "按住",
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 13.dp),
+        )
     }
 }

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fucktheddl_agent.model_gateway import ModelGateway
-from fucktheddl_agent.schemas import AgentRequest, AgentResponse, ApplyResponse
+from fucktheddl_agent.schemas import AgentRequest, AgentResponse, ApplyResponse, CommitmentsResponse
 from fucktheddl_agent.storage import ScheduleStore
 from fucktheddl_agent.workflow import build_agent_graph, to_response
 
@@ -53,3 +53,6 @@ class AgentService:
             file_path=str(result.file_path),
             commit_hash=result.commit_hash,
         )
+
+    def commitments(self) -> CommitmentsResponse:
+        return CommitmentsResponse(**self._store.list_commitments())

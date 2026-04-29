@@ -11,7 +11,7 @@ class StarterScheduleRepositoryTest {
     fun initialStateHasUsefulTodaySurfaceData() {
         val state = repository.loadInitialState()
 
-        assertEquals("Today", state.selectedTab.label)
+        assertEquals("今天", state.selectedTab.label)
         assertTrue(state.events.isNotEmpty())
         assertTrue(state.todos.isNotEmpty())
         assertTrue(state.openSlots.isNotEmpty())
@@ -23,7 +23,7 @@ class StarterScheduleRepositoryTest {
     fun navigationExposesScheduleTodoAndAgentDestinations() {
         val labels = repository.loadInitialState().tabs.map { it.label }
 
-        assertEquals(listOf("Today", "Calendar", "Todo", "Agent"), labels)
+        assertEquals(listOf("今天", "日历", "待办", "智能体"), labels)
     }
 
     @Test
@@ -33,5 +33,15 @@ class StarterScheduleRepositoryTest {
         assertTrue(state.todos.all { it.dueLabel.isNotBlank() })
         assertTrue(state.todos.none { it.dueLabel.contains(":") })
         assertTrue(state.events.all { it.timeRange.contains(":") })
+    }
+
+    @Test
+    fun starterCopyIsLocalizedForChineseUi() {
+        val state = repository.loadInitialState()
+
+        assertEquals("Git 已同步", state.syncState.label)
+        assertEquals("正在生成待确认方案", state.agentState.status)
+        assertEquals("复盘 DDL 队列", state.events.first().title)
+        assertEquals("今天截止", state.todos.first().dueLabel)
     }
 }

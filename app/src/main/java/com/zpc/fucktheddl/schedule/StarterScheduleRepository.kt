@@ -3,10 +3,10 @@ package com.zpc.fucktheddl.schedule
 class StarterScheduleRepository {
     fun loadInitialState(): ScheduleShellState {
         val tabs = listOf(
-            ScheduleTab(label = "Today"),
-            ScheduleTab(label = "Calendar"),
-            ScheduleTab(label = "Todo"),
-            ScheduleTab(label = "Agent"),
+            ScheduleTab(label = "今天", destination = TabDestination.Today),
+            ScheduleTab(label = "日历", destination = TabDestination.Calendar),
+            ScheduleTab(label = "待办", destination = TabDestination.Todo),
+            ScheduleTab(label = "智能体", destination = TabDestination.Agent),
         )
 
         return ScheduleShellState(
@@ -15,48 +15,48 @@ class StarterScheduleRepository {
             events = listOf(
                 ScheduleEvent(
                     timeRange = "09:30 - 10:15",
-                    title = "Review DDL queue",
-                    detail = "Sort urgent deadlines before agent planning.",
-                    tag = "planning",
+                    title = "复盘 DDL 队列",
+                    detail = "先整理紧急截止事项，再交给智能体规划。",
+                    tag = "规划",
                     risk = ScheduleRisk.Deadline,
                 ),
                 ScheduleEvent(
                     timeRange = "14:00 - 15:30",
-                    title = "Deep work block",
-                    detail = "Protected focus time for the current project.",
-                    tag = "focus",
+                    title = "深度工作时段",
+                    detail = "为当前项目保留不被打断的专注时间。",
+                    tag = "专注",
                     risk = ScheduleRisk.Focus,
                 ),
                 ScheduleEvent(
                     timeRange = "20:00 - 20:20",
-                    title = "Daily schedule closeout",
-                    detail = "Confirm tomorrow's first task and reminders.",
-                    tag = "routine",
+                    title = "每日收尾",
+                    detail = "确认明天第一件事和提醒设置。",
+                    tag = "例行",
                     risk = ScheduleRisk.Normal,
                 ),
             ),
             todos = listOf(
                 TodoItem(
-                    title = "Finish Android agent shell",
-                    dueLabel = "Due today",
-                    detail = "Keep the first native loop buildable and installable.",
-                    tag = "android",
+                    title = "完成安卓智能体外壳",
+                    dueLabel = "今天截止",
+                    detail = "保持第一版原生闭环可构建、可安装。",
+                    tag = "安卓",
                     priority = TodoPriority.High,
                     done = false,
                 ),
                 TodoItem(
-                    title = "Define JSON patch contract",
-                    dueLabel = "Due tomorrow",
-                    detail = "Separate event patches from todo patches before backend writes.",
-                    tag = "backend",
+                    title = "定义 JSON 补丁协议",
+                    dueLabel = "明天截止",
+                    detail = "后端写入前区分日程补丁和待办补丁。",
+                    tag = "后端",
                     priority = TodoPriority.Medium,
                     done = false,
                 ),
                 TodoItem(
-                    title = "Archive browser prototype notes",
-                    dueLabel = "Due this week",
-                    detail = "Move validated prototype decisions into native UI tasks.",
-                    tag = "design",
+                    title = "归档浏览器原型笔记",
+                    dueLabel = "本周截止",
+                    detail = "把已验证的原型决策沉淀到原生界面任务中。",
+                    tag = "设计",
                     priority = TodoPriority.Low,
                     done = true,
                 ),
@@ -64,32 +64,28 @@ class StarterScheduleRepository {
             openSlots = listOf(
                 OpenSlot(
                     timeRange = "10:30 - 11:30",
-                    suggestion = "Open slot for short admin tasks.",
+                    suggestion = "适合处理短小的行政杂事。",
                 ),
                 OpenSlot(
                     timeRange = "16:00 - 17:00",
-                    suggestion = "Good window for an Agent-suggested reschedule.",
+                    suggestion = "适合接受智能体建议的重新排期。",
                 ),
             ),
             agentState = AgentState(
-                status = "Drafting a confirmation card",
+                status = "正在生成待确认方案",
                 activeChain = listOf(
-                    AgentStep(label = "Classify intent", state = AgentStepState.Done),
-                    AgentStep(label = "Read schedule and todo facts", state = AgentStepState.Done),
-                    AgentStep(label = "Validate conflicts", state = AgentStepState.Active),
-                    AgentStep(label = "Wait for confirmation", state = AgentStepState.Waiting),
-                    AgentStep(label = "Write JSON and Git commit", state = AgentStepState.Waiting),
+                    AgentStep(label = "识别用户意图", state = AgentStepState.Done),
+                    AgentStep(label = "读取日程和待办事实", state = AgentStepState.Done),
+                    AgentStep(label = "校验时间冲突", state = AgentStepState.Active),
+                    AgentStep(label = "等待用户确认", state = AgentStepState.Waiting),
+                    AgentStep(label = "写入 JSON 并提交 Git", state = AgentStepState.Waiting),
                 ),
-                pendingProposal = AgentProposal(
-                    title = "Split commitments by type",
-                    summary = "Timed attendance stays on the calendar. Deadline work moves to Todo.",
-                    impact = "Prevents a deadline from pretending to be a meeting.",
-                ),
+                pendingProposal = null,
                 writePolicy = "proposal_required",
             ),
             syncState = SyncState(
                 kind = "clean",
-                label = "Git clean",
+                label = "Git 已同步",
             ),
         )
     }
