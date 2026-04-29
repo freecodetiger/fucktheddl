@@ -8,25 +8,21 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -38,8 +34,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -47,16 +43,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zpc.fucktheddl.agent.AgentApiClient
 import com.zpc.fucktheddl.agent.AgentProposal
+import com.zpc.fucktheddl.agent.CommitmentType
 import com.zpc.fucktheddl.agent.mapCommitmentsToScheduleState
 import com.zpc.fucktheddl.schedule.AgentState
 import com.zpc.fucktheddl.schedule.AgentStepState
 import com.zpc.fucktheddl.schedule.OpenSlot
 import com.zpc.fucktheddl.schedule.ScheduleEvent
-import com.zpc.fucktheddl.schedule.AgentProposal as ScheduleAgentProposal
 import com.zpc.fucktheddl.schedule.ScheduleRisk
 import com.zpc.fucktheddl.schedule.ScheduleShellState
 import com.zpc.fucktheddl.schedule.ScheduleTab
@@ -66,13 +63,20 @@ import com.zpc.fucktheddl.schedule.TodoPriority
 import com.zpc.fucktheddl.voice.RealtimeAsrCallback
 import com.zpc.fucktheddl.voice.RealtimeAsrClient
 
-private val Ink = Color(0xFF141414)
-private val Muted = Color(0xFF6B6B6B)
+private val Ink = Color(0xFF171717)
+private val InkSoft = Color(0xFF3F3F46)
+private val Muted = Color(0xFF71717A)
+private val Divider = Color(0xFFE4E4E7)
+private val Canvas = Color(0xFFF7F7F5)
+private val Panel = Color(0xFFFFFFFF)
 private val Accent = Color(0xFF2563EB)
+private val AccentSoft = Color(0xFFEAF1FF)
 private val Risk = Color(0xFFD97706)
+private val RiskSoft = Color(0xFFFFF4DE)
 private val Danger = Color(0xFFDC2626)
+private val DangerSoft = Color(0xFFFFE8E8)
 private val Success = Color(0xFF059669)
-private val SurfaceSoft = Color(0xFFF2F2EF)
+private val SuccessSoft = Color(0xFFE8F6EF)
 
 @Composable
 fun FuckTheDdlApp(
@@ -82,10 +86,17 @@ fun FuckTheDdlApp(
 ) {
     var selectedTab by remember { mutableStateOf(initialState.selectedTab) }
     var shellState by remember { mutableStateOf(initialState) }
+    var connectionLabel by remember { mutableStateOf(initialState.syncState.label) }
+    var connectionHealthy by remember { mutableStateOf(true) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun refreshCommitments() {
-        val client = agentApiClient ?: return
+        val client = agentApiClient
+        if (client == null) {
+            connectionLabel = "未连接后端"
+            connectionHealthy = false
+            return
+        }
         Thread {
             runCatching {
                 mapCommitmentsToScheduleState(client.commitments())
@@ -95,6 +106,13 @@ fun FuckTheDdlApp(
                         events = commitments.events.ifEmpty { initialState.events },
                         todos = commitments.todos.ifEmpty { initialState.todos },
                     )
+                    connectionLabel = "已同步"
+                    connectionHealthy = true
+                }
+            }.onFailure { error ->
+                mainHandler.post {
+                    connectionLabel = error.message?.takeIf { it.isNotBlank() } ?: "连接失败"
+                    connectionHealthy = false
                 }
             }
         }.start()
@@ -105,17 +123,15 @@ fun FuckTheDdlApp(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Canvas,
         bottomBar = {
-            AgentComposer(
+            BottomWorkspace(
+                tabs = initialState.tabs,
+                selectedTab = selectedTab,
+                onTabSelected = { selectedTab = it },
                 agentApiClient = agentApiClient,
                 asrClient = asrClient,
                 onCommitmentsChanged = ::refreshCommitments,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
             )
         },
     ) { innerPadding ->
@@ -124,25 +140,21 @@ fun FuckTheDdlApp(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 20.dp),
+                .padding(horizontal = 18.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            Header(
-                syncLabel = initialState.syncState.label,
-                agentStatus = initialState.agentState.status,
-            )
-            TabSwitcher(
-                tabs = initialState.tabs,
+            CompactHeader(
                 selectedTab = selectedTab,
-                onTabSelected = { selectedTab = it },
+                connectionLabel = connectionLabel,
+                connectionHealthy = connectionHealthy,
+                events = shellState.events,
+                todos = shellState.todos,
             )
-
             when (selectedTab.destination) {
-                TabDestination.Today -> TodaySurface(
+                TabDestination.Today -> TodayTimeline(
                     events = shellState.events,
                     todos = shellState.todos,
                     openSlots = shellState.openSlots,
-                    agentState = shellState.agentState,
                 )
 
                 TabDestination.Calendar -> CalendarSurface(events = shellState.events)
@@ -154,11 +166,14 @@ fun FuckTheDdlApp(
 }
 
 @Composable
-private fun Header(
-    syncLabel: String,
-    agentStatus: String,
+private fun CompactHeader(
+    selectedTab: ScheduleTab,
+    connectionLabel: String,
+    connectionHealthy: Boolean,
+    events: List<ScheduleEvent>,
+    todos: List<TodoItem>,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -169,122 +184,303 @@ private fun Header(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = "fucktheddl",
+                    text = selectedTab.label,
                     color = Ink,
-                    fontSize = 30.sp,
+                    fontSize = 32.sp,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 0.sp,
                 )
                 Text(
-                    text = "日程是必须在特定时间参与的事；待办是在期限前完成的事。智能体负责把它们分清楚。",
+                    text = "fucktheddl",
                     color = Muted,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
                 )
             }
-            StatusPill(label = syncLabel)
-        }
-        Surface(
-            color = Color(0xFFEAF1FF),
-            shape = RoundedCornerShape(6.dp),
-        ) {
-            Text(
-                text = agentStatus,
-                color = Accent,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            StatusPill(
+                label = connectionLabel,
+                healthy = connectionHealthy,
             )
+        }
+        TodayBrief(events = events, todos = todos)
+    }
+}
+
+@Composable
+private fun TodayBrief(
+    events: List<ScheduleEvent>,
+    todos: List<TodoItem>,
+) {
+    val activeTodos = todos.count { !it.done }
+    val urgentTodos = todos.count { !it.done && it.priority == TodoPriority.High }
+    Surface(
+        color = Panel,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SummaryMetric(value = events.size.toString(), label = "日程", color = Accent)
+            SummaryMetric(value = activeTodos.toString(), label = "待办", color = Risk)
+            SummaryMetric(value = urgentTodos.toString(), label = "高压", color = Danger)
         }
     }
 }
 
 @Composable
-private fun StatusPill(label: String) {
+private fun SummaryMetric(
+    value: String,
+    label: String,
+    color: Color,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            color = color,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(text = label, color = Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun StatusPill(
+    label: String,
+    healthy: Boolean,
+) {
+    val color = if (healthy) Success else Danger
+    val background = if (healthy) SuccessSoft else DangerSoft
     Surface(
-        color = Color(0xFFEAF3EF),
+        color = background,
         shape = RoundedCornerShape(999.dp),
     ) {
         Text(
             text = label,
-            color = Success,
+            color = color,
             fontSize = 12.sp,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
         )
     }
 }
 
 @Composable
-private fun TabSwitcher(
-    tabs: List<ScheduleTab>,
-    selectedTab: ScheduleTab,
-    onTabSelected: (ScheduleTab) -> Unit,
+private fun TodayTimeline(
+    events: List<ScheduleEvent>,
+    todos: List<TodoItem>,
+    openSlots: List<OpenSlot>,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        tabs.forEach { tab ->
-            FilterChip(
-                selected = tab == selectedTab,
-                onClick = { onTabSelected(tab) },
-                label = { Text(tab.label) },
-                shape = RoundedCornerShape(6.dp),
-            )
+    val pendingTodos = todos.filterNot { it.done }
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        SectionHeader(
+            title = "今天时间线",
+            caption = events.firstOrNull()?.timeRange ?: "暂无固定日程",
+        )
+        Surface(
+            color = Panel,
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Divider, RoundedCornerShape(18.dp)),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                if (events.isEmpty()) {
+                    EmptyState(title = "今天没有固定日程", detail = "底部智能条可以直接添加安排。")
+                } else {
+                    events.forEachIndexed { index, event ->
+                        TimelineEventRow(
+                            event = event,
+                            showConnector = index != events.lastIndex || openSlots.isNotEmpty(),
+                        )
+                    }
+                }
+                openSlots.take(2).forEach { slot ->
+                    OpenSlotRow(slot = slot)
+                }
+            }
+        }
+        if (pendingTodos.isNotEmpty()) {
+            DeadlinePressureBlock(todos = pendingTodos.take(3))
         }
     }
 }
 
 @Composable
-private fun TodaySurface(
-    events: List<ScheduleEvent>,
-    todos: List<TodoItem>,
-    openSlots: List<OpenSlot>,
-    agentState: AgentState,
+private fun SectionHeader(
+    title: String,
+    caption: String,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        SummaryStrip(events = events, todos = todos)
-        SectionTitle("接下来要处理")
-        events.take(2).forEach { event -> EventCard(event = event) }
-        SectionTitle("截止事项")
-        todos.filter { !it.done }.take(2).forEach { todo -> TodoCard(todo = todo) }
-        SectionTitle("空档")
-        openSlots.forEach { slot -> OpenSlotCard(slot = slot) }
-        agentState.pendingProposal?.let { ProposalCard(proposal = it) }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun SummaryStrip(
-    events: List<ScheduleEvent>,
-    todos: List<TodoItem>,
-) {
-    FlowRow(
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom,
     ) {
-        MetricPill(label = "日程", value = events.size.toString(), color = Accent)
-        MetricPill(label = "待办", value = todos.count { !it.done }.toString(), color = Risk)
-        MetricPill(label = "完成", value = todos.count { it.done }.toString(), color = Success)
+        Text(
+            text = title,
+            color = Ink,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(text = caption, color = Muted, fontSize = 12.sp)
     }
 }
 
 @Composable
-private fun MetricPill(
-    label: String,
-    value: String,
-    color: Color,
+private fun TimelineEventRow(
+    event: ScheduleEvent,
+    showConnector: Boolean,
 ) {
-    Surface(
-        color = Color.White,
-        shape = RoundedCornerShape(6.dp),
-        modifier = Modifier.border(1.dp, Color(0xFFE6E6E2), RoundedCornerShape(6.dp)),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .background(event.risk.color(), RoundedCornerShape(999.dp)),
+            )
+            if (showConnector) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .width(2.dp)
+                        .height(58.dp)
+                        .background(Divider, RoundedCornerShape(999.dp)),
+                )
+            }
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(text = value, color = color, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Text(text = label, color = Muted, fontSize = 13.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = event.timeRange,
+                    color = Muted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(text = event.risk.label(), color = event.risk.color(), fontSize = 12.sp)
+            }
+            Text(
+                text = event.title,
+                color = Ink,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = event.detail,
+                color = InkSoft,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            MetadataPill(text = event.tag, color = Accent, background = AccentSoft)
+        }
+    }
+}
+
+@Composable
+private fun OpenSlotRow(slot: OpenSlot) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .border(2.dp, Divider, RoundedCornerShape(999.dp)),
+            )
+        }
+        Surface(
+            color = Canvas,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(text = slot.timeRange, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(text = slot.suggestion, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeadlinePressureBlock(todos: List<TodoItem>) {
+    Surface(
+        color = RiskSoft,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFFF3D7A3), RoundedCornerShape(18.dp)),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SectionHeader(title = "截止压力", caption = "${todos.size} 项待处理")
+            todos.forEach { todo -> DeadlineRow(todo = todo) }
+        }
+    }
+}
+
+@Composable
+private fun DeadlineRow(todo: TodoItem) {
+    val color = todo.priority.color()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 3.dp)
+                .size(18.dp)
+                .border(2.dp, color, RoundedCornerShape(6.dp))
+                .background(if (todo.done) SuccessSoft else Color.Transparent, RoundedCornerShape(6.dp)),
+        )
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = todo.title, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = todo.dueLabel, color = color, fontSize = 12.sp)
+            }
+            Text(
+                text = todo.detail,
+                color = InkSoft,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -292,89 +488,114 @@ private fun MetricPill(
 @Composable
 private fun CalendarSurface(events: List<ScheduleEvent>) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle("日历")
-        Text(
-            text = "只有必须在特定时间参与的事情才放在这里。只要能在截止前任意时间完成，就应该放进待办。",
-            color = Muted,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
-        )
-        events.forEach { event -> EventCard(event = event) }
+        SectionHeader(title = "日历", caption = "${events.size} 个固定安排")
+        if (events.isEmpty()) {
+            EmptyState(title = "暂无固定日程", detail = "有明确开始和结束时间的安排会出现在这里。")
+        } else {
+            events.forEach { event -> EventCard(event = event) }
+        }
     }
 }
 
 @Composable
 private fun TodoSurface(todos: List<TodoItem>) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle("待办")
-        Text(
-            text = "待办用于追踪有截止期限的任务。智能体可以为它安排专注时段，但待办本身不是日历事件。",
-            color = Muted,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
-        )
-        todos.forEach { todo -> TodoCard(todo = todo) }
+    val active = todos.filterNot { it.done }
+    val done = todos.filter { it.done }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        SectionHeader(title = "待办", caption = "${active.size} 项未完成")
+        if (active.isEmpty() && done.isEmpty()) {
+            EmptyState(title = "没有待办", detail = "把有截止期限的任务交给底部智能条。")
+        } else {
+            active.forEach { todo -> TodoCard(todo = todo) }
+            if (done.isNotEmpty()) {
+                SectionHeader(title = "已完成", caption = "${done.size} 项")
+                done.forEach { todo -> TodoCard(todo = todo) }
+            }
+        }
     }
 }
 
 @Composable
 private fun AgentSurface(agentState: AgentState) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionTitle("智能体链路")
-        Text(
-            text = "所有写入都需要确认。智能体可以分类、校验并提出方案，但持久化 JSON 修改必须等你明确批准。",
-            color = Muted,
-            fontSize = 14.sp,
-            lineHeight = 20.sp,
-        )
-        agentState.activeChain.forEach { step ->
-            AgentStepRow(label = step.label, state = step.state)
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        SectionHeader(title = "智能体", caption = agentState.writePolicy)
+        AgentStatusPanel(status = agentState.status)
+        Surface(
+            color = Panel,
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Divider, RoundedCornerShape(18.dp)),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                agentState.activeChain.forEachIndexed { index, step ->
+                    AgentStepRow(
+                        label = step.label,
+                        state = step.state,
+                        showConnector = index != agentState.activeChain.lastIndex,
+                    )
+                }
+            }
         }
-        agentState.pendingProposal?.let { ProposalCard(proposal = it) }
+        agentState.pendingProposal?.let { proposal ->
+            StaticProposalPanel(
+                title = proposal.title,
+                summary = proposal.summary,
+                impact = proposal.impact,
+            )
+        }
     }
 }
 
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        color = Ink,
-        fontSize = 18.sp,
-        fontWeight = FontWeight.Medium,
-        letterSpacing = 0.sp,
-    )
+private fun AgentStatusPanel(status: String) {
+    Surface(
+        color = AccentSoft,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(Accent, RoundedCornerShape(999.dp)),
+            )
+            Text(text = status, color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+    }
 }
 
 @Composable
 private fun EventCard(event: ScheduleEvent) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        shape = RoundedCornerShape(4.dp),
-        modifier = Modifier.border(1.dp, Color(0xFFE6E6E2), RoundedCornerShape(4.dp)),
+    Surface(
+        color = Panel,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
+            modifier = Modifier.padding(14.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            RiskMarker(risk = event.risk)
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(text = event.timeRange, color = Muted, fontSize = 12.sp)
-                Text(
-                    text = event.title,
-                    color = Ink,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    text = event.detail,
-                    color = Muted,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                )
-                Text(text = "#${event.tag}", color = Accent, fontSize = 12.sp)
+            Box(
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .size(width = 4.dp, height = 54.dp)
+                    .background(event.risk.color(), RoundedCornerShape(999.dp)),
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(text = event.timeRange, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(text = event.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = event.detail, color = InkSoft, fontSize = 13.sp, lineHeight = 18.sp)
+                MetadataPill(text = event.tag, color = Accent, background = AccentSoft)
             }
         }
     }
@@ -382,76 +603,65 @@ private fun EventCard(event: ScheduleEvent) {
 
 @Composable
 private fun TodoCard(todo: TodoItem) {
-    val color = when (todo.priority) {
-        TodoPriority.High -> Danger
-        TodoPriority.Medium -> Risk
-        TodoPriority.Low -> Success
-    }
-    Card(
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        shape = RoundedCornerShape(4.dp),
-        modifier = Modifier.border(1.dp, Color(0xFFE6E6E2), RoundedCornerShape(4.dp)),
+    val color = if (todo.done) Success else todo.priority.color()
+    Surface(
+        color = Panel,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
+            modifier = Modifier.padding(14.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.Top,
         ) {
             Box(
                 modifier = Modifier
-                    .padding(top = 3.dp)
-                    .size(18.dp)
-                    .border(2.dp, if (todo.done) Success else color, RoundedCornerShape(4.dp))
-                    .background(if (todo.done) Color(0xFFEAF3EF) else Color.Transparent),
+                    .padding(top = 2.dp)
+                    .size(20.dp)
+                    .border(2.dp, color, RoundedCornerShape(7.dp))
+                    .background(if (todo.done) SuccessSoft else Color.Transparent, RoundedCornerShape(7.dp)),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(text = todo.dueLabel, color = color, fontSize = 12.sp)
-                Text(
-                    text = todo.title,
-                    color = Ink,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Text(text = todo.detail, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
-                Text(text = "#${todo.tag}", color = Accent, fontSize = 12.sp)
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(text = todo.dueLabel, color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    MetadataPill(text = todo.priority.label(), color = color, background = color.copy(alpha = 0.12f))
+                }
+                Text(text = todo.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = todo.detail, color = InkSoft, fontSize = 13.sp, lineHeight = 18.sp)
             }
         }
     }
 }
 
 @Composable
-private fun ProposalCard(proposal: ScheduleAgentProposal) {
+private fun StaticProposalPanel(
+    title: String,
+    summary: String,
+    impact: String,
+) {
     Surface(
-        color = Color(0xFFFFF8EA),
-        shape = RoundedCornerShape(6.dp),
-        modifier = Modifier.border(1.dp, Color(0xFFF3D7A3), RoundedCornerShape(6.dp)),
+        color = RiskSoft,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFFF3D7A3), RoundedCornerShape(18.dp)),
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(text = proposal.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            Text(text = proposal.summary, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
-            Text(text = proposal.impact, color = Risk, fontSize = 13.sp, lineHeight = 18.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {},
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                    shape = RoundedCornerShape(6.dp),
-                ) {
-                    Text("确认")
-                }
-                Button(
-                    onClick = {},
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F3F3F)),
-                    shape = RoundedCornerShape(6.dp),
-                ) {
-                    Text("编辑")
-                }
-            }
+            Text(text = title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(text = summary, color = InkSoft, fontSize = 13.sp, lineHeight = 19.sp)
+            Text(text = impact, color = Risk, fontSize = 13.sp, lineHeight = 19.sp)
         }
     }
 }
@@ -460,80 +670,150 @@ private fun ProposalCard(proposal: ScheduleAgentProposal) {
 private fun AgentStepRow(
     label: String,
     state: AgentStepState,
+    showConnector: Boolean,
 ) {
-    val color = when (state) {
-        AgentStepState.Done -> Success
-        AgentStepState.Active -> Accent
-        AgentStepState.Waiting -> Muted
-    }
+    val color = state.color()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White, RoundedCornerShape(4.dp))
-            .border(1.dp, Color(0xFFE6E6E2), RoundedCornerShape(4.dp))
-            .padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .background(color, RoundedCornerShape(999.dp)),
-        )
-        Text(text = label, color = Ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        Text(text = state.localizedLabel(), color = color, fontSize = 12.sp)
-    }
-}
-
-private fun AgentStepState.localizedLabel(): String {
-    return when (this) {
-        AgentStepState.Done -> "已完成"
-        AgentStepState.Active -> "进行中"
-        AgentStepState.Waiting -> "等待"
-    }
-}
-
-@Composable
-private fun RiskMarker(risk: ScheduleRisk) {
-    val color = when (risk) {
-        ScheduleRisk.Normal -> Success
-        ScheduleRisk.Deadline -> Risk
-        ScheduleRisk.Focus -> Accent
-    }
-    Box(
-        modifier = Modifier
-            .padding(top = 3.dp)
-            .size(width = 4.dp, height = 58.dp)
-            .background(color, RoundedCornerShape(4.dp)),
-    )
-}
-
-@Composable
-private fun OpenSlotCard(slot: OpenSlot) {
-    Surface(
-        color = SurfaceSoft,
-        shape = RoundedCornerShape(4.dp),
-    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .background(color, RoundedCornerShape(999.dp)),
+            )
+            if (showConnector) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .width(2.dp)
+                        .height(34.dp)
+                        .background(Divider, RoundedCornerShape(999.dp)),
+                )
+            }
+        }
         Column(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(text = slot.timeRange, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(text = slot.suggestion, color = Muted, fontSize = 13.sp)
+            Text(text = label, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(text = state.localizedLabel(), color = color, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun MetadataPill(
+    text: String,
+    color: Color,
+    background: Color,
+) {
+    Surface(
+        color = background,
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Text(
+            text = text,
+            color = color,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+        )
+    }
+}
+
+@Composable
+private fun EmptyState(
+    title: String,
+    detail: String,
+) {
+    Surface(
+        color = Panel,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(text = title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(text = detail, color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
+        }
+    }
+}
+
+@Composable
+private fun BottomWorkspace(
+    tabs: List<ScheduleTab>,
+    selectedTab: ScheduleTab,
+    onTabSelected: (ScheduleTab) -> Unit,
+    agentApiClient: AgentApiClient?,
+    asrClient: RealtimeAsrClient?,
+    onCommitmentsChanged: () -> Unit,
+) {
+    Surface(
+        color = Panel,
+        shadowElevation = 10.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding(),
+        ) {
+            SmartComposer(
+                agentApiClient = agentApiClient,
+                asrClient = asrClient,
+                onCommitmentsChanged = onCommitmentsChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Divider),
+            )
+            NavigationBar(
+                containerColor = Panel,
+                tonalElevation = 0.dp,
+            ) {
+                tabs.forEach { tab ->
+                    NavigationBarItem(
+                        selected = tab == selectedTab,
+                        onClick = { onTabSelected(tab) },
+                        icon = {
+                            Text(
+                                text = tab.destination.symbol(),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        },
+                        label = { Text(text = tab.label, fontSize = 12.sp) },
+                    )
+                }
+            }
         }
     }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun AgentComposer(
+private fun SmartComposer(
     agentApiClient: AgentApiClient?,
     asrClient: RealtimeAsrClient?,
     onCommitmentsChanged: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var inputText by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("按住说话") }
+    var status by remember { mutableStateOf(if (agentApiClient == null) "后端未连接" else "准备记录") }
     var proposal by remember { mutableStateOf<AgentProposal?>(null) }
     var lastCommitmentId by remember { mutableStateOf<String?>(null) }
     var isListening by remember { mutableStateOf(false) }
@@ -542,95 +822,91 @@ private fun AgentComposer(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     fun submit(value: String) {
-        if (value.isBlank() || agentApiClient == null) return
-        status = "正在提交"
+        if (value.isBlank()) {
+            status = "请输入日程或待办"
+            return
+        }
+        val client = agentApiClient
+        if (client == null) {
+            status = "后端未连接，仍可编辑输入"
+            return
+        }
+        status = "正在生成方案"
         Thread {
-            val result = agentApiClient.propose(value)
+            val result = client.propose(value)
             mainHandler.post {
                 if (result.proposal != null) {
                     proposal = result.proposal
-                    status = "方案已生成"
+                    status = "方案待确认"
                 } else {
-                    status = result.error ?: "智能体暂不可用"
+                    status = result.error ?: "连接失败"
                 }
             }
         }.start()
     }
 
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         proposal?.let { current ->
-            Surface(color = Color(0xFFFFF8EA), shape = RoundedCornerShape(6.dp)) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(current.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(current.summary, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                Thread {
-                                    val result = agentApiClient?.confirm(current.id)
-                                    mainHandler.post {
-                                        proposal = null
-                                        lastCommitmentId = result?.commitmentId?.takeIf { it.isNotBlank() }
-                                        status = result?.error ?: "已确认"
-                                        if (result?.error == null) {
-                                            onCommitmentsChanged()
-                                        }
-                                    }
-                                }.start()
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                            shape = RoundedCornerShape(6.dp),
-                        ) { Text("确认") }
-                        Button(
-                            onClick = {
-                                inputText = current.title
-                                proposal = null
-                                status = "正在编辑"
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F3F3F)),
-                            shape = RoundedCornerShape(6.dp),
-                        ) { Text("编辑") }
-                        Button(
-                            onClick = {
-                                proposal = null
-                                status = "已取消"
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Danger),
-                            shape = RoundedCornerShape(6.dp),
-                        ) { Text("取消") }
+            AgentProposalSheet(
+                proposal = current,
+                onConfirm = {
+                    val client = agentApiClient
+                    if (client == null) {
+                        status = "后端未连接"
+                        return@AgentProposalSheet
                     }
-                }
-            }
+                    status = "正在确认"
+                    Thread {
+                        val result = client.confirm(current.id)
+                        mainHandler.post {
+                            proposal = null
+                            lastCommitmentId = result.commitmentId.takeIf { it.isNotBlank() }
+                            status = result.error ?: "已确认并刷新"
+                            if (result.error == null) {
+                                inputText = ""
+                                onCommitmentsChanged()
+                            }
+                        }
+                    }.start()
+                },
+                onEdit = {
+                    inputText = current.title
+                    proposal = null
+                    status = "编辑后重新发送"
+                },
+                onCancel = {
+                    proposal = null
+                    status = "已取消方案"
+                },
+            )
         }
         lastCommitmentId?.let { commitmentId ->
-            Surface(color = Color(0xFFEAF3EF), shape = RoundedCornerShape(6.dp)) {
-                Row(
-                    modifier = Modifier.padding(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("上次修改已提交", color = Success, fontSize = 12.sp)
-                    Button(
-                        onClick = {
-                            Thread {
-                                val result = agentApiClient?.undo(commitmentId)
-                                mainHandler.post {
-                                    status = result?.error ?: "已撤销"
-                                    lastCommitmentId = null
-                                    if (result?.error == null) {
-                                        onCommitmentsChanged()
-                                    }
-                                }
-                            }.start()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Risk),
-                        shape = RoundedCornerShape(6.dp),
-                    ) { Text("撤销") }
-                }
-            }
+            UndoStrip(
+                onUndo = {
+                    val client = agentApiClient
+                    if (client == null) {
+                        status = "后端未连接"
+                        return@UndoStrip
+                    }
+                    status = "正在撤销"
+                    Thread {
+                        val result = client.undo(commitmentId)
+                        mainHandler.post {
+                            status = result.error ?: "已撤销"
+                            lastCommitmentId = null
+                            if (result.error == null) {
+                                onCommitmentsChanged()
+                            }
+                        }
+                    }.start()
+                },
+            )
         }
         Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(
@@ -652,14 +928,15 @@ private fun AgentComposer(
                             },
                         )
                     },
-                placeholder = { Text("添加日程或待办") },
+                placeholder = { Text("告诉智能体要安排什么") },
                 singleLine = true,
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(14.dp),
             )
             Button(
                 onClick = { submit(inputText) },
                 colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.height(56.dp),
             ) {
                 Text("发送")
             }
@@ -685,7 +962,7 @@ private fun AgentComposer(
                             override fun onFinal(text: String) {
                                 mainHandler.post {
                                     inputText = text
-                                    status = "已识别"
+                                    status = "已识别，正在生成方案"
                                     submit(text)
                                 }
                             }
@@ -709,7 +986,107 @@ private fun AgentComposer(
                 },
             )
         }
-        Text(status, color = Muted, fontSize = 12.sp)
+        Text(
+            text = status,
+            color = if (status.contains("失败") || status.contains("未连接")) Danger else Muted,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun AgentProposalSheet(
+    proposal: AgentProposal,
+    onConfirm: () -> Unit,
+    onEdit: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Surface(
+        color = Panel,
+        shape = RoundedCornerShape(22.dp),
+        shadowElevation = 8.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(22.dp)),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                MetadataPill(
+                    text = proposal.commitmentType.label(),
+                    color = Accent,
+                    background = AccentSoft,
+                )
+                Text(
+                    text = if (proposal.requiresConfirmation) "待确认" else "可直接执行",
+                    color = Risk,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Text(text = proposal.title, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text(text = proposal.summary, color = InkSoft, fontSize = 13.sp, lineHeight = 19.sp)
+            Text(text = proposal.impact, color = Risk, fontSize = 13.sp, lineHeight = 19.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onConfirm,
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("确认")
+                }
+                Button(
+                    onClick = onEdit,
+                    colors = ButtonDefaults.buttonColors(containerColor = InkSoft),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("编辑")
+                }
+                Button(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.buttonColors(containerColor = Danger),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("取消")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UndoStrip(onUndo: () -> Unit) {
+    Surface(
+        color = SuccessSoft,
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("上次修改已提交", color = Success, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Button(
+                onClick = onUndo,
+                colors = ButtonDefaults.buttonColors(containerColor = Risk),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                Text("撤销")
+            }
+        }
     }
 }
 
@@ -721,28 +1098,103 @@ private fun HoldToSpeakButton(
     onPressEnd: () -> Unit,
 ) {
     Surface(
-        color = if (listening) Danger else Risk,
-        shape = RoundedCornerShape(6.dp),
-        modifier = Modifier.pointerInput(enabled) {
-            detectTapGestures(
-                onPress = {
-                    if (!enabled) return@detectTapGestures
-                    onPressStart()
-                    try {
-                        tryAwaitRelease()
-                    } finally {
-                        onPressEnd()
-                    }
-                },
-            )
+        color = when {
+            !enabled -> Divider
+            listening -> Danger
+            else -> Risk
         },
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .height(56.dp)
+            .pointerInput(enabled) {
+                detectTapGestures(
+                    onPress = {
+                        if (!enabled) return@detectTapGestures
+                        onPressStart()
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            onPressEnd()
+                        }
+                    },
+                )
+            },
     ) {
-        Text(
-            text = if (listening) "松开" else "按住",
-            color = Color.White,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 13.dp),
-        )
+        Box(
+            modifier = Modifier.padding(horizontal = 14.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (listening) "松开" else "按住",
+                color = if (enabled) Color.White else Muted,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+private fun ScheduleRisk.color(): Color {
+    return when (this) {
+        ScheduleRisk.Normal -> Success
+        ScheduleRisk.Deadline -> Risk
+        ScheduleRisk.Focus -> Accent
+    }
+}
+
+private fun ScheduleRisk.label(): String {
+    return when (this) {
+        ScheduleRisk.Normal -> "正常"
+        ScheduleRisk.Deadline -> "临近"
+        ScheduleRisk.Focus -> "专注"
+    }
+}
+
+private fun TodoPriority.color(): Color {
+    return when (this) {
+        TodoPriority.High -> Danger
+        TodoPriority.Medium -> Risk
+        TodoPriority.Low -> Success
+    }
+}
+
+private fun TodoPriority.label(): String {
+    return when (this) {
+        TodoPriority.High -> "高"
+        TodoPriority.Medium -> "中"
+        TodoPriority.Low -> "低"
+    }
+}
+
+private fun AgentStepState.color(): Color {
+    return when (this) {
+        AgentStepState.Done -> Success
+        AgentStepState.Active -> Accent
+        AgentStepState.Waiting -> Muted
+    }
+}
+
+private fun AgentStepState.localizedLabel(): String {
+    return when (this) {
+        AgentStepState.Done -> "已完成"
+        AgentStepState.Active -> "进行中"
+        AgentStepState.Waiting -> "等待"
+    }
+}
+
+private fun CommitmentType.label(): String {
+    return when (this) {
+        CommitmentType.Schedule -> "日程"
+        CommitmentType.Todo -> "待办"
+        CommitmentType.Clarify -> "澄清"
+    }
+}
+
+private fun TabDestination.symbol(): String {
+    return when (this) {
+        TabDestination.Today -> "今"
+        TabDestination.Calendar -> "历"
+        TabDestination.Todo -> "办"
+        TabDestination.Agent -> "智"
     }
 }
