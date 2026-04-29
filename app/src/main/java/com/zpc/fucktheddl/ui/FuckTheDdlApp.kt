@@ -1,7 +1,10 @@
 package com.zpc.fucktheddl.ui
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,19 +39,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.zpc.fucktheddl.schedule.AgentProposal
+import com.zpc.fucktheddl.agent.AgentApiClient
+import com.zpc.fucktheddl.agent.AgentProposal
 import com.zpc.fucktheddl.schedule.AgentState
 import com.zpc.fucktheddl.schedule.AgentStepState
 import com.zpc.fucktheddl.schedule.OpenSlot
 import com.zpc.fucktheddl.schedule.ScheduleEvent
+import com.zpc.fucktheddl.schedule.AgentProposal as ScheduleAgentProposal
 import com.zpc.fucktheddl.schedule.ScheduleRisk
 import com.zpc.fucktheddl.schedule.ScheduleShellState
 import com.zpc.fucktheddl.schedule.ScheduleTab
 import com.zpc.fucktheddl.schedule.TodoItem
 import com.zpc.fucktheddl.schedule.TodoPriority
+import com.zpc.fucktheddl.voice.RealtimeAsrCallback
+import com.zpc.fucktheddl.voice.RealtimeAsrClient
 
 private val Ink = Color(0xFF141414)
 private val Muted = Color(0xFF6B6B6B)
@@ -59,13 +67,19 @@ private val Success = Color(0xFF059669)
 private val SurfaceSoft = Color(0xFFF2F2EF)
 
 @Composable
-fun FuckTheDdlApp(initialState: ScheduleShellState) {
+fun FuckTheDdlApp(
+    initialState: ScheduleShellState,
+    agentApiClient: AgentApiClient? = null,
+    asrClient: RealtimeAsrClient? = null,
+) {
     var selectedTab by remember { mutableStateOf(initialState.selectedTab) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             AgentComposer(
+                agentApiClient = agentApiClient,
+                asrClient = asrClient,
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
@@ -378,7 +392,7 @@ private fun TodoCard(todo: TodoItem) {
 }
 
 @Composable
-private fun ProposalCard(proposal: AgentProposal) {
+private fun ProposalCard(proposal: ScheduleAgentProposal) {
     Surface(
         color = Color(0xFFFFF8EA),
         shape = RoundedCornerShape(6.dp),
@@ -472,28 +486,160 @@ private fun OpenSlotCard(slot: OpenSlot) {
 }
 
 @Composable
-private fun AgentComposer(modifier: Modifier = Modifier) {
-    var text by remember { mutableStateOf("") }
+private fun AgentComposer(
+    agentApiClient: AgentApiClient?,
+    asrClient: RealtimeAsrClient?,
+    modifier: Modifier = Modifier,
+) {
+    var inputText by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("Hold to speak") }
+    var proposal by remember { mutableStateOf<AgentProposal?>(null) }
+    var lastCommitmentId by remember { mutableStateOf<String?>(null) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Add schedule or todo") },
-            singleLine = true,
-            shape = RoundedCornerShape(6.dp),
-        )
-        Button(
-            onClick = { text = "" },
-            colors = ButtonDefaults.buttonColors(containerColor = Accent),
-            shape = RoundedCornerShape(6.dp),
-        ) {
-            Text("Send")
+    fun submit(value: String) {
+        if (value.isBlank() || agentApiClient == null) return
+        status = "Submitting"
+        Thread {
+            val result = agentApiClient.propose(value)
+            mainHandler.post {
+                if (result.proposal != null) {
+                    proposal = result.proposal
+                    status = "Proposal ready"
+                } else {
+                    status = result.error ?: "Agent unavailable"
+                }
+            }
+        }.start()
+    }
+
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        proposal?.let { current ->
+            Surface(color = Color(0xFFFFF8EA), shape = RoundedCornerShape(6.dp)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(current.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(current.summary, color = Muted, fontSize = 12.sp, lineHeight = 16.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = {
+                                Thread {
+                                    val result = agentApiClient?.confirm(current.id)
+                                    mainHandler.post {
+                                        proposal = null
+                                        lastCommitmentId = result?.commitmentId?.takeIf { it.isNotBlank() }
+                                        status = result?.error ?: "Confirmed"
+                                    }
+                                }.start()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                            shape = RoundedCornerShape(6.dp),
+                        ) { Text("Confirm") }
+                        Button(
+                            onClick = {
+                                inputText = current.title
+                                proposal = null
+                                status = "Editing"
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3F3F3F)),
+                            shape = RoundedCornerShape(6.dp),
+                        ) { Text("Edit") }
+                        Button(
+                            onClick = {
+                                proposal = null
+                                status = "Cancelled"
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Danger),
+                            shape = RoundedCornerShape(6.dp),
+                        ) { Text("Cancel") }
+                    }
+                }
+            }
         }
+        lastCommitmentId?.let { commitmentId ->
+            Surface(color = Color(0xFFEAF3EF), shape = RoundedCornerShape(6.dp)) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Last change committed", color = Success, fontSize = 12.sp)
+                    Button(
+                        onClick = {
+                            Thread {
+                                val result = agentApiClient?.undo(commitmentId)
+                                mainHandler.post {
+                                    status = result?.error ?: "Undone"
+                                    lastCommitmentId = null
+                                }
+                            }.start()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Risk),
+                        shape = RoundedCornerShape(6.dp),
+                    ) { Text("Undo") }
+                }
+            }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Add schedule or todo") },
+                singleLine = true,
+                shape = RoundedCornerShape(6.dp),
+            )
+            Button(
+                onClick = { submit(inputText) },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                shape = RoundedCornerShape(6.dp),
+            ) {
+                Text("Send")
+            }
+            Button(
+                onClick = {},
+                modifier = Modifier.pointerInput(asrClient) {
+                    detectTapGestures(
+                        onPress = {
+                            if (asrClient == null) {
+                                status = "Voice unavailable"
+                                return@detectTapGestures
+                            }
+                            status = "Listening"
+                            asrClient.start(object : RealtimeAsrCallback {
+                                override fun onPartial(text: String) {
+                                    mainHandler.post {
+                                        inputText = text
+                                        status = "Listening"
+                                    }
+                                }
+
+                                override fun onFinal(text: String) {
+                                    mainHandler.post {
+                                        inputText = text
+                                        status = "Recognized"
+                                        submit(text)
+                                    }
+                                }
+
+                                override fun onError(message: String) {
+                                    mainHandler.post { status = message }
+                                }
+                            })
+                            tryAwaitRelease()
+                            status = "Finishing"
+                            asrClient.stop()
+                        },
+                    )
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Risk),
+                shape = RoundedCornerShape(6.dp),
+            ) {
+                Text("Hold")
+            }
+        }
+        Text(status, color = Muted, fontSize = 12.sp)
     }
 }

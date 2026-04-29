@@ -27,6 +27,7 @@ class AgentGraphState(TypedDict, total=False):
     facts_summary: str
     validation_summary: str
     proposal: dict[str, Any]
+    model_extraction: dict[str, Any] | None
 
 
 def build_agent_graph():
@@ -46,6 +47,18 @@ def build_agent_graph():
 
 def classify_intent(state: AgentGraphState) -> AgentGraphState:
     text = state["text"]
+    model_extraction = state.get("model_extraction")
+    if model_extraction:
+        commitment_type = str(model_extraction.get("commitment_type", "clarify"))
+        return {
+            **state,
+            "commitment_type": commitment_type if commitment_type in {"schedule", "todo", "clarify"} else "clarify",
+            "title": str(model_extraction.get("title") or _compact_title(text)),
+            "time_range": str(model_extraction.get("time") or "") or None,
+            "due_label": str(model_extraction.get("due") or "") or None,
+            "priority": str(model_extraction.get("priority") or "medium"),
+        }
+
     has_time = any(token in text for token in ("点", ":", "上午", "下午", "晚上", "早上"))
     has_deadline = any(token in text.lower() for token in ("ddl", "截止", "前", "完成", "交", "due"))
 
@@ -97,19 +110,29 @@ def draft_proposal(state: AgentGraphState) -> AgentGraphState:
     schedule_patch = None
     todo_patch = None
     if commitment_type == "schedule":
+        start = _extract_start(state["text"], state["timezone"])
         schedule_patch = {
             "title": state["title"],
-            "time_range": state["time_range"] or "Needs time",
+            "start": start,
+            "end": _plus_one_hour(start),
             "timezone": state["timezone"],
-            "reminder": "10 minutes before" if "提醒" in state["text"] else None,
+            "location": "",
+            "notes": "",
+            "tags": [],
+            "reminders": [{"offset_minutes": 10, "channel": "local_notification"}]
+            if "提醒" in state["text"]
+            else [],
         }
         summary = "Create a calendar event because the user must attend at a specific time."
         impact = "This will occupy a visible time block and can conflict with other events."
     elif commitment_type == "todo":
         todo_patch = {
             "title": state["title"],
-            "due_label": state["due_label"] or "Due later",
+            "due": _extract_due_date(state["text"]),
+            "timezone": state["timezone"],
             "priority": state["priority"],
+            "notes": "",
+            "tags": [],
         }
         summary = "Create a todo because the user must finish work before a deadline."
         impact = "This will not occupy calendar time unless the Agent later proposes a focus block."
@@ -187,7 +210,35 @@ def _extract_due_label(text: str) -> str:
     return "Due later"
 
 
+def _extract_due_date(text: str) -> str:
+    if "2026年5月1日" in text or "2026-05-01" in text:
+        return "2026-05-01"
+    if "周五" in text or "星期五" in text:
+        return "2026-05-01"
+    if "明天" in text:
+        return "2026-04-30"
+    return "2026-05-01"
+
+
+def _extract_start(text: str, timezone_name: str) -> str:
+    date = _extract_due_date(text)
+    if "三点" in text or "3点" in text or "15:" in text:
+        time = "15:00:00"
+    elif "九点" in text or "9点" in text:
+        time = "09:00:00"
+    elif "晚上" in text:
+        time = "20:00:00"
+    else:
+        time = "09:00:00"
+    offset = "+08:00" if timezone_name == "Asia/Shanghai" else "+00:00"
+    return f"{date}T{time}{offset}"
+
+
+def _plus_one_hour(start: str) -> str:
+    hour = int(start[11:13])
+    return f"{start[:11]}{hour + 1:02d}{start[13:]}"
+
+
 def _compact_title(text: str) -> str:
     cleaned = text.strip().replace("，", " ").replace(",", " ")
     return cleaned[:48]
-

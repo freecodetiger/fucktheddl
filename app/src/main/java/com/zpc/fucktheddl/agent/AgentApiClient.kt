@@ -1,0 +1,93 @@
+package com.zpc.fucktheddl.agent
+
+import org.json.JSONObject
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+
+class AgentApiClient(
+    private val config: AgentApiConfig,
+) {
+    fun propose(text: String, sessionId: String = "android"): AgentSubmitResult {
+        return try {
+            val body = JSONObject()
+                .put("text", text)
+                .put("session_id", sessionId)
+                .put("timezone", "Asia/Shanghai")
+            val response = postJson("agent/propose", body)
+            val proposalJson = response.getJSONObject("proposal")
+            AgentSubmitResult(
+                proposal = AgentProposal(
+                    id = proposalJson.getString("id"),
+                    commitmentType = proposalJson.getString("commitment_type").toCommitmentType(),
+                    title = proposalJson.getString("title"),
+                    summary = proposalJson.getString("summary"),
+                    impact = proposalJson.getString("impact"),
+                    requiresConfirmation = proposalJson.getBoolean("requires_confirmation"),
+                ),
+                error = null,
+            )
+        } catch (error: Exception) {
+            AgentSubmitResult(proposal = null, error = error.message ?: "Agent request failed")
+        }
+    }
+
+    fun confirm(proposalId: String): AgentApplyResult {
+        return apply("agent/confirm/$proposalId")
+    }
+
+    fun undo(commitmentId: String): AgentApplyResult {
+        return apply("agent/undo/$commitmentId")
+    }
+
+    fun asrSession(): JSONObject {
+        val connection = URL(config.normalizedBaseUrl + "asr/session").openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 5000
+        connection.readTimeout = 10000
+        return JSONObject(connection.inputStream.bufferedReader().readText())
+    }
+
+    private fun postJson(path: String, body: JSONObject): JSONObject {
+        val connection = URL(config.normalizedBaseUrl + path).openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 20000
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(body.toString())
+        }
+        val stream = if (connection.responseCode in 200..299) {
+            connection.inputStream
+        } else {
+            connection.errorStream
+        }
+        val text = stream.bufferedReader().readText()
+        if (connection.responseCode !in 200..299) {
+            error(text)
+        }
+        return JSONObject(text)
+    }
+
+    private fun apply(path: String): AgentApplyResult {
+        return try {
+            val body = postJson(path, JSONObject())
+            AgentApplyResult(
+                status = body.getString("status"),
+                commitmentId = body.getString("commitment_id"),
+                error = null,
+            )
+        } catch (error: Exception) {
+            AgentApplyResult(status = "failed", commitmentId = "", error = error.message)
+        }
+    }
+}
+
+private fun String.toCommitmentType(): CommitmentType {
+    return when (this) {
+        "schedule" -> CommitmentType.Schedule
+        "todo" -> CommitmentType.Todo
+        else -> CommitmentType.Clarify
+    }
+}

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 CommitmentType = Literal["schedule", "todo", "clarify"]
 StepState = Literal["done", "active", "waiting"]
+CommitmentStatus = Literal["confirmed", "cancelled", "done", "active"]
 
 
 class AgentRequest(BaseModel):
@@ -18,17 +19,29 @@ class ChainStep(BaseModel):
     state: StepState
 
 
+class Reminder(BaseModel):
+    offset_minutes: int
+    channel: Literal["local_notification"] = "local_notification"
+
+
 class SchedulePatch(BaseModel):
     title: str
-    time_range: str
+    start: str
+    end: str
     timezone: str
-    reminder: str | None = None
+    location: str = ""
+    notes: str = ""
+    tags: list[str] = Field(default_factory=list)
+    reminders: list[Reminder] = Field(default_factory=list)
 
 
 class TodoPatch(BaseModel):
     title: str
-    due_label: str
+    due: str
+    timezone: str = "Asia/Shanghai"
     priority: Literal["low", "medium", "high"]
+    notes: str = ""
+    tags: list[str] = Field(default_factory=list)
 
 
 class Proposal(BaseModel):
@@ -49,8 +62,34 @@ class AgentResponse(BaseModel):
     proposal: Proposal
 
 
+class ModelConfigResponse(BaseModel):
+    base_url: str | None
+    model: str
+    configured: bool
+    enabled: bool
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     agent_framework: Literal["langgraph"]
     write_policy: Literal["proposal_required"]
+    model: ModelConfigResponse
 
+
+class ApplyResponse(BaseModel):
+    status: Literal["applied", "undone"]
+    proposal_id: str | None = None
+    commitment_id: str
+    commitment_type: Literal["schedule", "todo"]
+    file_path: str
+    commit_hash: str
+
+
+class AsrSessionResponse(BaseModel):
+    app_key: str
+    token: str
+    url: str
+    model: Literal["fun-asr-realtime-2025-09-15"]
+    sample_rate: int
+    service_type: int
+    expires_at: str
