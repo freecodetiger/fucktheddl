@@ -117,6 +117,7 @@ Core screens:
 
 - Today view with chat input.
 - Week calendar with animated event blocks.
+- Todo view for deadline-bound work that does not require attendance at a specific time.
 - Month calendar with density and tag visualization.
 - Event detail and edit confirmation sheet.
 - Agent activity stream showing reasoning state at a high level.
@@ -125,6 +126,7 @@ Interaction principles:
 
 - Natural language input should always be reachable.
 - Any Agent change should appear first as a confirmation card.
+- Timed attendance belongs in the calendar; deadline-bound work belongs in Todo.
 - New events should animate from the confirmation card into the calendar.
 - Event edits should animate position, duration, or label changes instead of hard refreshing.
 - Deletes should support undo.

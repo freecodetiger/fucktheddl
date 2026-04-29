@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+
+app/build/

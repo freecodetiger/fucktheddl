@@ -21,9 +21,19 @@ Use the disruptive path from the design plan:
 
 - `Today`: current time, today's timeline, open slots, DDL risk layer, recent Agent action.
 - `Calendar`: day/week/month modes with week as the default planning view.
+- `Todo`: deadline-bound work, grouped by urgency and completion state.
 - `Agent Composer`: global input layer with text field, press-and-hold voice button, and send action.
 - `Proposal Card`: concise schedule mutation preview with confirm, edit, undo, or dismiss.
 - `Sync Indicator`: small Git-backed state: clean, syncing, offline, conflict, failed.
+
+## Schedule vs Todo
+
+The app must keep a hard product boundary:
+
+- Schedule items are events that require the user to attend or act at a specific time.
+- Todo items are obligations that must be completed before a deadline.
+- The Agent may propose calendar focus blocks for a Todo, but that does not turn the Todo itself into a schedule event.
+- Confirmation cards must show which type the Agent chose before any durable write.
 
 ## Visual System
 
