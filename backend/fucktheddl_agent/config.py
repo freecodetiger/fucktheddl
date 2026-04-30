@@ -12,6 +12,7 @@ class ModelSettings:
     base_url: str | None
     model: str
     enabled: bool
+    disable_thinking: bool
 
     @property
     def configured(self) -> bool:
@@ -47,8 +48,9 @@ def load_settings(data_root: Path | None = None) -> AppSettings:
     model = ModelSettings(
         api_key=os.environ.get("OPENAI_API_KEY"),
         base_url=os.environ.get("OPENAI_BASE_URL"),
-        model=os.environ.get("OPENAI_MODEL", "gpt-5.4"),
+        model=os.environ.get("OPENAI_MODEL", "deepseek-v4-flash"),
         enabled=os.environ.get("FUCKTHEDDL_USE_MODEL", "false").lower() == "true",
+        disable_thinking=os.environ.get("OPENAI_DISABLE_THINKING", "true").lower() == "true",
     )
     asr = AsrSettings(
         api_key=os.environ.get("ALIYUN_API_KEY"),

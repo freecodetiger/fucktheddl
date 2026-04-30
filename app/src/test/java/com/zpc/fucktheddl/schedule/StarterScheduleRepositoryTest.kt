@@ -20,10 +20,10 @@ class StarterScheduleRepositoryTest {
     }
 
     @Test
-    fun navigationExposesScheduleTodoAndAgentDestinations() {
+    fun navigationExposesVoiceFirstCoreDestinations() {
         val labels = repository.loadInitialState().tabs.map { it.label }
 
-        assertEquals(listOf("今天", "日历", "待办", "智能体"), labels)
+        assertEquals(listOf("今天", "待办"), labels)
     }
 
     @Test

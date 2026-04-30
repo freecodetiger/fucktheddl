@@ -16,6 +16,8 @@ data class ScheduleTab(
 )
 
 data class ScheduleEvent(
+    val id: String = "",
+    val date: String = "",
     val timeRange: String,
     val title: String,
     val detail: String,
@@ -24,6 +26,8 @@ data class ScheduleEvent(
 )
 
 data class TodoItem(
+    val id: String = "",
+    val dueDate: String = "",
     val title: String,
     val dueLabel: String,
     val detail: String,
@@ -70,7 +74,7 @@ enum class TabDestination {
     Today,
     Calendar,
     Todo,
-    Agent,
+    Settings,
 }
 
 enum class ScheduleRisk {

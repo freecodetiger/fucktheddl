@@ -25,23 +25,35 @@ class AliyunRealtimeAsrClient(
     private var audioRecord: AudioRecord? = null
     private var initialized = false
     private var callback: RealtimeAsrCallback? = null
+    private var cachedSession: JSONObject? = null
+    private var cachedSessionAtMillis: Long = 0L
 
     override fun start(callback: RealtimeAsrCallback) {
         this.callback = callback
         Thread {
             runCatching {
                 ensurePermission()
-                val session = sessionProvider()
+                startRecorder()
+                val session = currentSession()
                 initializeIfNeeded(session)
                 nui.setParams(buildRealtimeParams(session).toString())
                 nui.startDialog(Constants.VadMode.TYPE_P2T, "")
             }.onFailure { error ->
+                stopRecorder()
                 callback.onError(error.message ?: "启动语音识别失败")
             }
         }.start()
     }
 
     override fun stop() {
+        Thread {
+            nui.stopDialog()
+            Thread.sleep(700)
+            stopRecorder()
+        }.start()
+    }
+
+    override fun cancel() {
         Thread {
             nui.cancelDialog()
             stopRecorder()
@@ -76,6 +88,19 @@ class AliyunRealtimeAsrClient(
         )
         check(result == 0) { "阿里云语音识别初始化失败：$result" }
         initialized = true
+    }
+
+    private fun currentSession(): JSONObject {
+        val now = System.currentTimeMillis()
+        cachedSession?.let { session ->
+            if (now - cachedSessionAtMillis < 10 * 60 * 1000L) {
+                return session
+            }
+        }
+        return sessionProvider().also { session ->
+            cachedSession = session
+            cachedSessionAtMillis = now
+        }
     }
 
     private fun ensureWorkspaceAssets() {
@@ -120,7 +145,9 @@ class AliyunRealtimeAsrClient(
                 JSONObject()
                     .put("model", session.getString("model"))
                     .put("sample_rate", session.getInt("sample_rate"))
-                    .put("enable_intermediate_result", true),
+                    .put("enable_intermediate_result", true)
+                    .put("enable_punctuation_prediction", true)
+                    .put("enable_inverse_text_normalization", true),
             )
     }
 
@@ -176,7 +203,7 @@ class AliyunRealtimeAsrClient(
             return
         }
         audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             16000,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,

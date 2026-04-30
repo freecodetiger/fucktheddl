@@ -14,21 +14,25 @@ fun mapCommitmentsToScheduleState(payload: AgentCommitmentsPayload): AgentCommit
     return AgentCommitmentsUiState(
         events = payload.events.map { event ->
             ScheduleEvent(
+                id = event.id,
+                date = event.start.toDateLabel(),
                 timeRange = "${event.start.toTimeLabel()} - ${event.end.toTimeLabel()}",
                 title = event.title,
                 detail = event.notes.ifBlank {
-                    event.location.ifBlank { "智能体创建的日程" }
+                    event.location.ifBlank { "已创建日程" }
                 },
-                tag = event.tags.firstOrNull().orEmpty().ifBlank { "智能体" },
+                tag = event.tags.firstOrNull().orEmpty().ifBlank { "日程" },
                 risk = ScheduleRisk.Normal,
             )
         },
         todos = payload.todos.map { todo ->
             TodoItem(
+                id = todo.id,
+                dueDate = todo.due,
                 title = todo.title,
                 dueLabel = todo.due.toDueLabel(),
-                detail = todo.notes.ifBlank { "智能体创建的待办" },
-                tag = todo.tags.firstOrNull().orEmpty().ifBlank { "智能体" },
+                detail = todo.notes.ifBlank { "已创建待办" },
+                tag = todo.tags.firstOrNull().orEmpty().ifBlank { "待办" },
                 priority = todo.priority.toTodoPriority(),
                 done = todo.status == "done",
             )
@@ -38,6 +42,10 @@ fun mapCommitmentsToScheduleState(payload: AgentCommitmentsPayload): AgentCommit
 
 private fun String.toTimeLabel(): String {
     return if (length >= 16 && this[10] == 'T') substring(11, 16) else this
+}
+
+private fun String.toDateLabel(): String {
+    return if (length >= 10) substring(0, 10) else ""
 }
 
 private fun String.toDueLabel(): String {

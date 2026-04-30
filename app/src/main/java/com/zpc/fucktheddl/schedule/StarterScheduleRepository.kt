@@ -4,9 +4,7 @@ class StarterScheduleRepository {
     fun loadInitialState(): ScheduleShellState {
         val tabs = listOf(
             ScheduleTab(label = "今天", destination = TabDestination.Today),
-            ScheduleTab(label = "日历", destination = TabDestination.Calendar),
             ScheduleTab(label = "待办", destination = TabDestination.Todo),
-            ScheduleTab(label = "智能体", destination = TabDestination.Agent),
         )
 
         return ScheduleShellState(
@@ -16,7 +14,7 @@ class StarterScheduleRepository {
                 ScheduleEvent(
                     timeRange = "09:30 - 10:15",
                     title = "复盘 DDL 队列",
-                    detail = "先整理紧急截止事项，再交给智能体规划。",
+                    detail = "先整理紧急截止事项，再用语音快速规划。",
                     tag = "规划",
                     risk = ScheduleRisk.Deadline,
                 ),
@@ -37,7 +35,7 @@ class StarterScheduleRepository {
             ),
             todos = listOf(
                 TodoItem(
-                    title = "完成安卓智能体外壳",
+                    title = "完成安卓语音外壳",
                     dueLabel = "今天截止",
                     detail = "保持第一版原生闭环可构建、可安装。",
                     tag = "安卓",
@@ -68,7 +66,7 @@ class StarterScheduleRepository {
                 ),
                 OpenSlot(
                     timeRange = "16:00 - 17:00",
-                    suggestion = "适合接受智能体建议的重新排期。",
+                    suggestion = "适合重新排期或补录安排。",
                 ),
             ),
             agentState = AgentState(

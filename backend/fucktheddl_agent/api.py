@@ -12,6 +12,8 @@ from fucktheddl_agent.schemas import (
     CommitmentsResponse,
     HealthResponse,
     ModelConfigResponse,
+    Proposal,
+    ProposalEditRequest,
 )
 from fucktheddl_agent.service import AgentService
 
@@ -45,6 +47,13 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         result = agent_service.confirm(proposal_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Proposal not found")
+        return result
+
+    @router.post("/agent/proposal/{proposal_id}/edit", response_model=Proposal)
+    def edit_proposal(proposal_id: str, request: ProposalEditRequest) -> Proposal:
+        result = agent_service.edit_proposal(proposal_id, request)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Editable proposal not found")
         return result
 
     @router.post("/agent/undo/{commitment_id}", response_model=ApplyResponse)

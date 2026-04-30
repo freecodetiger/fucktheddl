@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-CommitmentType = Literal["schedule", "todo", "clarify"]
+CommitmentType = Literal["schedule", "todo", "delete", "update", "query", "suggestion", "clarify"]
 StepState = Literal["done", "active", "waiting"]
 CommitmentStatus = Literal["confirmed", "cancelled", "done", "active"]
 
@@ -44,6 +44,29 @@ class TodoPatch(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class DeletePatch(BaseModel):
+    target_id: str
+    target_type: Literal["schedule", "todo"]
+    target_title: str
+
+
+class UpdatePatch(BaseModel):
+    target_id: str
+    target_type: Literal["schedule", "todo"]
+    target_title: str
+    schedule_patch: SchedulePatch | None = None
+    todo_patch: TodoPatch | None = None
+
+
+class ProposalCandidate(BaseModel):
+    id: str
+    target_type: Literal["schedule", "todo"]
+    title: str
+    when: str
+    detail: str = ""
+    resolution_text: str
+
+
 class Proposal(BaseModel):
     id: str
     commitment_type: CommitmentType
@@ -53,6 +76,16 @@ class Proposal(BaseModel):
     requires_confirmation: bool
     schedule_patch: SchedulePatch | None
     todo_patch: TodoPatch | None
+    delete_patch: DeletePatch | None = None
+    update_patch: UpdatePatch | None = None
+    candidates: list[ProposalCandidate] = Field(default_factory=list)
+
+
+class ProposalEditRequest(BaseModel):
+    title: str | None = None
+    summary: str | None = None
+    schedule_patch: SchedulePatch | None = None
+    todo_patch: TodoPatch | None = None
 
 
 class AgentResponse(BaseModel):
@@ -67,6 +100,7 @@ class ModelConfigResponse(BaseModel):
     model: str
     configured: bool
     enabled: bool
+    disable_thinking: bool = True
 
 
 class HealthResponse(BaseModel):

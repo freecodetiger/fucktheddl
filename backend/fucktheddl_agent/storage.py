@@ -33,6 +33,15 @@ class ScheduleStore:
         return Proposal.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
     def apply_proposal(self, proposal: Proposal, source_text: str = "") -> ApplyResult:
+        if proposal.commitment_type == "delete" and proposal.delete_patch:
+            result = self.undo_commitment(proposal.delete_patch.target_id)
+            if result is None:
+                raise ValueError("Target commitment was not found")
+            return result
+
+        if proposal.commitment_type == "update" and proposal.update_patch:
+            return self.update_commitment(proposal)
+
         if proposal.commitment_type == "schedule" and proposal.schedule_patch:
             record = self._schedule_record(proposal, source_text)
             month = record["start"][:7]
@@ -58,6 +67,54 @@ class ScheduleStore:
             return ApplyResult(record["id"], "todo", file_path, commit_hash)
 
         raise ValueError("Proposal is not applicable")
+
+    def update_commitment(self, proposal: Proposal) -> ApplyResult:
+        patch = proposal.update_patch
+        assert patch is not None
+        for directory, commitment_type in (("schedules", "schedule"), ("todos", "todo")):
+            for file_path in (self.root / directory).glob("*.json"):
+                collection = self._load_collection(file_path)
+                for index, item in enumerate(collection):
+                    if item.get("id") != patch.target_id:
+                        continue
+                    if commitment_type == "schedule" and patch.schedule_patch:
+                        replacement = self._schedule_record(
+                            Proposal(
+                                id=proposal.id,
+                                commitment_type="schedule",
+                                title=patch.schedule_patch.title,
+                                summary=proposal.summary,
+                                impact=proposal.impact,
+                                requires_confirmation=True,
+                                schedule_patch=patch.schedule_patch,
+                                todo_patch=None,
+                            ),
+                            source_text=item.get("source_text", ""),
+                        )
+                    elif commitment_type == "todo" and patch.todo_patch:
+                        replacement = self._todo_record(
+                            Proposal(
+                                id=proposal.id,
+                                commitment_type="todo",
+                                title=patch.todo_patch.title,
+                                summary=proposal.summary,
+                                impact=proposal.impact,
+                                requires_confirmation=True,
+                                schedule_patch=None,
+                                todo_patch=patch.todo_patch,
+                            ),
+                            source_text=item.get("source_text", ""),
+                        )
+                    else:
+                        raise ValueError("Update patch type does not match target")
+                    replacement["id"] = item["id"]
+                    replacement["created_at"] = item.get("created_at", replacement["created_at"])
+                    collection[index] = replacement
+                    collection.sort(key=lambda current: current.get("start", current.get("due", "")))
+                    self._write_json(file_path, collection)
+                    commit_hash = self._commit(file_path, f"update: {patch.target_title}")
+                    return ApplyResult(item["id"], commitment_type, file_path, commit_hash)
+        raise ValueError("Target commitment was not found")
 
     def undo_commitment(self, commitment_id: str) -> ApplyResult | None:
         for directory, commitment_type in (("schedules", "schedule"), ("todos", "todo")):

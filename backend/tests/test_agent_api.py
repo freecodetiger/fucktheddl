@@ -4,13 +4,16 @@ import subprocess
 from fastapi.testclient import TestClient
 
 from fucktheddl_agent.api import create_app
-from fucktheddl_agent.workflow import classify_intent
+from fucktheddl_agent.workflow import build_agent_graph, classify_intent
 
 
 def make_client(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://codex.example/v1")
-    monkeypatch.setenv("OPENAI_MODEL", "gpt-5.4")
+    monkeypatch.setenv("OPENAI_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("OPENAI_DISABLE_THINKING", "true")
+    if "FUCKTHEDDL_TODAY" not in os.environ:
+        monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-29")
     return TestClient(create_app(data_root=tmp_path))
 
 
@@ -24,7 +27,8 @@ def test_health_reports_agent_backend_ready(tmp_path, monkeypatch):
     assert body["agent_framework"] == "langgraph"
     assert body["write_policy"] == "proposal_required"
     assert body["model"]["base_url"] == "https://codex.example/v1"
-    assert body["model"]["model"] == "gpt-5.4"
+    assert body["model"]["model"] == "deepseek-v4-flash"
+    assert body["model"]["disable_thinking"] is True
 
 
 def test_schedule_request_returns_confirmation_gated_schedule_proposal(tmp_path, monkeypatch):
@@ -53,6 +57,127 @@ def test_schedule_request_returns_confirmation_gated_schedule_proposal(tmp_path,
     ]
     proposal_id = body["proposal"]["id"]
     assert (tmp_path / ".runtime" / "proposals" / f"{proposal_id}.json").exists()
+
+
+def test_noon_nap_request_keeps_requested_time_and_friendly_chinese_summary(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "明天12点午睡",
+            "session_id": "test-noon-nap",
+        },
+    )
+
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["commitment_type"] == "schedule"
+    assert proposal["title"] == "午睡"
+    assert proposal["schedule_patch"]["start"] == "2026-05-01T12:00:00+08:00"
+    assert proposal["schedule_patch"]["end"] == "2026-05-01T13:00:00+08:00"
+    assert "午睡" in proposal["summary"]
+    assert "明天 12:00-13:00" in proposal["summary"]
+    assert "日程" in proposal["impact"]
+
+
+def test_day_after_tomorrow_noon_request_uses_day_after_tomorrow(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "后天12点午睡",
+            "session_id": "test-day-after-tomorrow-noon-nap",
+        },
+    )
+
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["title"] == "午睡"
+    assert proposal["schedule_patch"]["start"] == "2026-05-02T12:00:00+08:00"
+    assert "后天 12:00-13:00" in proposal["summary"]
+
+
+def test_tomorrow_morning_geography_class_stays_on_tomorrow_timeline(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "明天上午九点钟上地理课",
+            "session_id": "test-tomorrow-geography-class",
+        },
+    )
+
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["commitment_type"] == "schedule"
+    assert proposal["title"] == "上地理课"
+    assert proposal["schedule_patch"]["start"] == "2026-05-01T09:00:00+08:00"
+    assert "明天 09:00-10:00" in proposal["summary"]
+
+
+def test_month_day_morning_event_uses_spoken_calendar_date(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "5月6号上午有一个活动",
+            "session_id": "test-month-day-morning-event",
+        },
+    )
+
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["commitment_type"] == "schedule"
+    assert proposal["title"] == "有一个活动"
+    assert proposal["schedule_patch"]["start"] == "2026-05-06T09:00:00+08:00"
+    assert "2026-05-06 09:00-10:00" in proposal["summary"]
+
+
+def test_model_extracted_calendar_date_is_not_dropped(monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    state = build_agent_graph().invoke(
+        {
+            "text": "上午有一个金山的面试",
+            "session_id": "test-model-date-not-dropped",
+            "timezone": "Asia/Shanghai",
+            "model_extraction": {
+                "commitment_type": "schedule",
+                "title": "金山面试",
+                "date": "2026-05-06",
+                "time": "09:00",
+                "priority": "medium",
+            },
+            "commitments": {"events": [], "todos": []},
+        },
+        config={"configurable": {"thread_id": "test-model-date-not-dropped"}},
+    )
+
+    assert state["proposal"]["schedule_patch"]["start"] == "2026-05-06T09:00:00+08:00"
+
+
+def test_spaced_asr_month_day_text_uses_spoken_calendar_date(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "5 月 6 号上午有一个金山的面试",
+            "session_id": "test-spaced-asr-month-day",
+        },
+    )
+
+    assert response.status_code == 200
+    proposal = response.json()["proposal"]
+    assert proposal["schedule_patch"]["start"] == "2026-05-06T09:00:00+08:00"
 
 
 def test_deadline_request_returns_todo_proposal_not_calendar_event(tmp_path, monkeypatch):
@@ -86,7 +211,7 @@ def test_local_rules_override_uncertain_model_classification_for_clear_deadline(
     )
 
     assert state["commitment_type"] == "todo"
-    assert state["due_label"] == "Due tomorrow"
+    assert state["due_label"] == "明天截止"
 
 
 def test_confirming_unknown_proposal_does_not_write_anything(tmp_path, monkeypatch):
@@ -124,6 +249,43 @@ def test_confirming_schedule_proposal_writes_month_file_and_git_commit(tmp_path,
     assert body["commit_hash"] in git_log
 
 
+def test_editing_schedule_proposal_updates_patch_before_confirmation(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "5月6号上午有一个金山的面试",
+            "session_id": "test-edit-schedule-proposal",
+        },
+    )
+    proposal = response.json()["proposal"]
+
+    edited = client.post(
+        f"/agent/proposal/{proposal['id']}/edit",
+        json={
+            "schedule_patch": {
+                **proposal["schedule_patch"],
+                "title": "金山云面试",
+                "start": "2026-05-06T10:30:00+08:00",
+                "end": "2026-05-06T11:30:00+08:00",
+                "notes": "带简历",
+            },
+        },
+    )
+
+    assert edited.status_code == 200
+    assert edited.json()["schedule_patch"]["title"] == "金山云面试"
+    assert edited.json()["schedule_patch"]["start"] == "2026-05-06T10:30:00+08:00"
+
+    confirm = client.post(f"/agent/confirm/{proposal['id']}")
+    assert confirm.status_code == 200
+    events = client.get("/commitments").json()["events"]
+    assert events[0]["title"] == "金山云面试"
+    assert events[0]["start"] == "2026-05-06T10:30:00+08:00"
+    assert events[0]["notes"] == "带简历"
+
+
 def test_commitments_returns_confirmed_schedule_after_agent_confirmation(tmp_path, monkeypatch):
     client = make_client(tmp_path, monkeypatch)
     response = client.post(
@@ -145,6 +307,188 @@ def test_commitments_returns_confirmed_schedule_after_agent_confirmation(tmp_pat
     assert body["events"][0]["start"] == "2026-04-30T15:00:00+08:00"
     assert body["events"][0]["status"] == "confirmed"
     assert body["todos"] == []
+
+
+def test_delete_schedule_request_targets_existing_commitment_instead_of_creating(tmp_path, monkeypatch):
+    client = make_client(tmp_path, monkeypatch)
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "明天下午三点去电玩城",
+            "session_id": "create-before-delete",
+        },
+    )
+    proposal_id = response.json()["proposal"]["id"]
+    client.post(f"/agent/confirm/{proposal_id}")
+
+    delete = client.post(
+        "/agent/propose",
+        json={
+            "text": "删除明天下午三点的电玩城日程",
+            "session_id": "delete-arcade",
+        },
+    )
+
+    assert delete.status_code == 200
+    proposal = delete.json()["proposal"]
+    assert proposal["commitment_type"] == "delete"
+    assert proposal["schedule_patch"] is None
+    assert proposal["delete_patch"]["target_title"] == "去电玩城"
+    assert "准备删除日程" in proposal["summary"]
+
+    confirm = client.post(f"/agent/confirm/{proposal['id']}")
+    assert confirm.status_code == 200
+    assert client.get("/commitments").json()["events"] == []
+
+
+def test_fuzzy_delete_returns_candidates_instead_of_clarifying(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+    for text, session in (
+        ("今天上午九点有个活动", "create-morning-activity"),
+        ("今天下午三点有个活动", "create-afternoon-activity"),
+    ):
+        response = client.post("/agent/propose", json={"text": text, "session_id": session})
+        client.post(f"/agent/confirm/{response.json()['proposal']['id']}")
+
+    fuzzy = client.post(
+        "/agent/propose",
+        json={"text": "今天取消某项活动", "session_id": "fuzzy-delete-today"},
+    )
+
+    assert fuzzy.status_code == 200
+    proposal = fuzzy.json()["proposal"]
+    assert proposal["commitment_type"] == "delete"
+    assert proposal["requires_confirmation"] is False
+    assert proposal["delete_patch"] is None
+    assert proposal["title"] == "选择要取消的项目"
+    assert len(proposal["candidates"]) == 2
+    assert all("#" in candidate["resolution_text"] for candidate in proposal["candidates"])
+
+    selected = client.post(
+        "/agent/propose",
+        json={
+            "text": proposal["candidates"][0]["resolution_text"],
+            "session_id": "fuzzy-delete-selected",
+        },
+    ).json()["proposal"]
+    assert selected["commitment_type"] == "delete"
+    assert selected["requires_confirmation"] is True
+    assert selected["delete_patch"]["target_id"] == proposal["candidates"][0]["id"]
+
+
+def test_fuzzy_delete_falls_back_to_nearby_schedule_when_today_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+    response = client.post(
+        "/agent/propose",
+        json={"text": "明天上午九点有个活动", "session_id": "create-tomorrow-activity"},
+    )
+    client.post(f"/agent/confirm/{response.json()['proposal']['id']}")
+
+    fuzzy = client.post(
+        "/agent/propose",
+        json={"text": "今天取消某项活动", "session_id": "fuzzy-delete-empty-today"},
+    ).json()["proposal"]
+
+    assert fuzzy["commitment_type"] == "delete"
+    assert fuzzy["requires_confirmation"] is False
+    assert len(fuzzy["candidates"]) == 1
+    assert fuzzy["candidates"][0]["title"] == "有个活动"
+
+
+def test_fuzzy_update_returns_candidates_and_selected_candidate_updates(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
+    client = make_client(tmp_path, monkeypatch)
+    for text, session in (
+        ("今天上午九点有个活动", "create-update-morning"),
+        ("今天下午三点有个活动", "create-update-afternoon"),
+    ):
+        response = client.post("/agent/propose", json={"text": text, "session_id": session})
+        client.post(f"/agent/confirm/{response.json()['proposal']['id']}")
+
+    fuzzy = client.post(
+        "/agent/propose",
+        json={"text": "把今天那个活动改到晚上八点", "session_id": "fuzzy-update-today"},
+    ).json()["proposal"]
+
+    assert fuzzy["commitment_type"] == "update"
+    assert fuzzy["requires_confirmation"] is False
+    assert fuzzy["title"] == "选择要修改的项目"
+    assert len(fuzzy["candidates"]) == 2
+
+    selected = client.post(
+        "/agent/propose",
+        json={
+            "text": fuzzy["candidates"][0]["resolution_text"],
+            "session_id": "fuzzy-update-selected",
+        },
+    ).json()["proposal"]
+    assert selected["commitment_type"] == "update"
+    assert selected["requires_confirmation"] is True
+    assert selected["update_patch"]["target_id"] == fuzzy["candidates"][0]["id"]
+    assert selected["update_patch"]["schedule_patch"]["start"] == "2026-04-30T20:00:00+08:00"
+
+
+def test_update_schedule_request_changes_existing_commitment_time(tmp_path, monkeypatch):
+    client = make_client(tmp_path, monkeypatch)
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "明天12点午睡",
+            "session_id": "create-before-update",
+        },
+    )
+    proposal_id = response.json()["proposal"]["id"]
+    client.post(f"/agent/confirm/{proposal_id}")
+
+    update = client.post(
+        "/agent/propose",
+        json={
+            "text": "把午睡改到明天下午2点",
+            "session_id": "update-nap",
+        },
+    )
+
+    assert update.status_code == 200
+    proposal = update.json()["proposal"]
+    assert proposal["commitment_type"] == "update"
+    assert proposal["update_patch"]["target_title"] == "午睡"
+    assert proposal["update_patch"]["schedule_patch"]["start"] == "2026-04-30T14:00:00+08:00"
+
+    confirm = client.post(f"/agent/confirm/{proposal['id']}")
+    assert confirm.status_code == 200
+    events = client.get("/commitments").json()["events"]
+    assert events[0]["title"] == "午睡"
+    assert events[0]["start"] == "2026-04-30T14:00:00+08:00"
+
+
+def test_query_and_suggestion_requests_return_non_write_results(tmp_path, monkeypatch):
+    client = make_client(tmp_path, monkeypatch)
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "明天下午三点去电玩城",
+            "session_id": "create-before-query",
+        },
+    )
+    client.post(f"/agent/confirm/{response.json()['proposal']['id']}")
+
+    query = client.post(
+        "/agent/propose",
+        json={"text": "明天有什么安排", "session_id": "query-tomorrow"},
+    ).json()["proposal"]
+    assert query["commitment_type"] == "query"
+    assert query["requires_confirmation"] is False
+    assert "去电玩城" in query["summary"]
+
+    suggestion = client.post(
+        "/agent/propose",
+        json={"text": "给我一些安排建议", "session_id": "suggest-plan"},
+    ).json()["proposal"]
+    assert suggestion["commitment_type"] == "suggestion"
+    assert suggestion["requires_confirmation"] is False
+    assert suggestion["summary"]
 
 
 def test_confirming_todo_proposal_writes_todo_month_file(tmp_path, monkeypatch):

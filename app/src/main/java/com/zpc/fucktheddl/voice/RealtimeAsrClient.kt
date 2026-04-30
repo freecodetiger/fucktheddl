@@ -3,6 +3,9 @@ package com.zpc.fucktheddl.voice
 interface RealtimeAsrClient {
     fun start(callback: RealtimeAsrCallback)
     fun stop()
+    fun cancel() {
+        stop()
+    }
     fun release()
 }
 
@@ -58,4 +61,3 @@ class VoiceInputController(
         asrClient.release()
     }
 }
-
