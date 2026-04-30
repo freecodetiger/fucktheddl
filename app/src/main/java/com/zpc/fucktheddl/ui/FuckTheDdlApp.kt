@@ -62,14 +62,15 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.zpc.fucktheddl.agent.AgentApiClient
 import com.zpc.fucktheddl.agent.AgentApplyResult
+import com.zpc.fucktheddl.agent.AgentCommitmentsPayload
+import com.zpc.fucktheddl.agent.AgentConnectionSettings
 import com.zpc.fucktheddl.agent.AgentProposal
 import com.zpc.fucktheddl.agent.AgentProposalCandidate
 import com.zpc.fucktheddl.agent.AgentSchedulePatch
-import com.zpc.fucktheddl.agent.AgentSubmitResult
 import com.zpc.fucktheddl.agent.AgentTodoPatch
+import com.zpc.fucktheddl.agent.ProposalPresentation
 import com.zpc.fucktheddl.agent.mapCommitmentsToScheduleState
-import com.zpc.fucktheddl.agent.shouldEditProposalBeforeConfirm
-import com.zpc.fucktheddl.schedule.OpenSlot
+import com.zpc.fucktheddl.agent.presentation
 import com.zpc.fucktheddl.schedule.ScheduleEvent
 import com.zpc.fucktheddl.schedule.ScheduleRisk
 import com.zpc.fucktheddl.schedule.ScheduleShellState
@@ -165,8 +166,13 @@ private data class EditableProposalDraft(
 @Composable
 fun FuckTheDdlApp(
     initialState: ScheduleShellState,
+    connectionSettings: AgentConnectionSettings,
     agentApiClient: AgentApiClient? = null,
     asrClient: RealtimeAsrClient? = null,
+    commitmentsProvider: () -> AgentCommitmentsPayload = { AgentCommitmentsPayload(emptyList(), emptyList()) },
+    proposalApplier: (AgentProposal) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
+    commitmentDeleter: (String) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
+    onConnectionSettingsSaved: (AgentConnectionSettings) -> Unit = {},
 ) {
     var shellState by remember { mutableStateOf(initialState) }
     val todayTab = remember(shellState.tabs) {
@@ -179,32 +185,27 @@ fun FuckTheDdlApp(
     }
     var selectedTab by remember { mutableStateOf(if (initialState.selectedTab.destination == TabDestination.Todo) todoTab else todayTab) }
     var showingCalendar by remember { mutableStateOf(false) }
+    var showingSettings by remember { mutableStateOf(false) }
     var connectionLabel by remember { mutableStateOf(initialState.syncState.label) }
     var connectionHealthy by remember { mutableStateOf(true) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun refreshCommitments() {
-        val client = agentApiClient
-        if (client == null) {
-            connectionLabel = "未连接后端"
-            connectionHealthy = false
-            return
-        }
         Thread {
             runCatching {
-                mapCommitmentsToScheduleState(client.commitments())
+                mapCommitmentsToScheduleState(commitmentsProvider())
             }.onSuccess { commitments ->
                 mainHandler.post {
                     shellState = shellState.copy(
-                        events = commitments.events.ifEmpty { initialState.events },
-                        todos = commitments.todos.ifEmpty { initialState.todos },
+                        events = commitments.events,
+                        todos = commitments.todos,
                     )
-                    connectionLabel = "已同步"
+                    connectionLabel = "本地"
                     connectionHealthy = true
                 }
             }.onFailure { error ->
                 mainHandler.post {
-                    connectionLabel = error.message?.takeIf { it.isNotBlank() } ?: "连接失败"
+                    connectionLabel = error.message?.takeIf { it.isNotBlank() } ?: "本地读取失败"
                     connectionHealthy = false
                 }
             }
@@ -212,14 +213,13 @@ fun FuckTheDdlApp(
     }
 
     fun deleteCommitment(commitmentId: String) {
-        val client = agentApiClient
-        if (commitmentId.isBlank() || client == null) {
+        if (commitmentId.isBlank()) {
             connectionLabel = "无法删除"
             connectionHealthy = false
             return
         }
         Thread {
-            val result = client.undo(commitmentId)
+            val result = commitmentDeleter(commitmentId)
             mainHandler.post {
                 if (result.error == null) {
                     connectionLabel = "已删除"
@@ -252,6 +252,9 @@ fun FuckTheDdlApp(
                 },
                 agentApiClient = agentApiClient,
                 asrClient = asrClient,
+                connectionSettings = connectionSettings,
+                commitmentsProvider = commitmentsProvider,
+                proposalApplier = proposalApplier,
                 onCommitmentsChanged = ::refreshCommitments,
             )
         },
@@ -271,6 +274,7 @@ fun FuckTheDdlApp(
                     selectedTab = todayTab
                     showingCalendar = true
                 },
+                onSettingsClick = { showingSettings = true },
             )
             when {
                 showingCalendar -> CalendarSurface(
@@ -282,7 +286,6 @@ fun FuckTheDdlApp(
                 selectedTab.destination == TabDestination.Today -> TodayTimeline(
                     events = shellState.events,
                     todos = shellState.todos,
-                    openSlots = shellState.openSlots,
                     onDeleteCommitment = ::deleteCommitment,
                 )
 
@@ -294,10 +297,21 @@ fun FuckTheDdlApp(
                 else -> TodayTimeline(
                     events = shellState.events,
                     todos = shellState.todos,
-                    openSlots = shellState.openSlots,
                     onDeleteCommitment = ::deleteCommitment,
                 )
             }
+        }
+        if (showingSettings) {
+            ConnectionSettingsOverlay(
+                settings = connectionSettings,
+                onSave = { settings ->
+                    onConnectionSettingsSaved(settings)
+                    connectionLabel = "正在连接"
+                    connectionHealthy = true
+                    showingSettings = false
+                },
+                onClose = { showingSettings = false },
+            )
         }
     }
 }
@@ -307,6 +321,7 @@ private fun CompactHeader(
     connectionLabel: String,
     connectionHealthy: Boolean,
     onDateClick: () -> Unit,
+    onSettingsClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -324,10 +339,38 @@ private fun CompactHeader(
                 detectTapGestures(onTap = { onDateClick() })
             },
         )
-        StatusPill(
-            label = connectionLabel,
-            healthy = connectionHealthy,
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StatusPill(
+                label = connectionLabel,
+                healthy = connectionHealthy,
+            )
+            SettingsButton(onClick = onSettingsClick)
+        }
+    }
+}
+
+@Composable
+private fun SettingsButton(onClick: () -> Unit) {
+    Surface(
+        color = AccentSoft,
+        shape = RoundedCornerShape(999.dp),
+        modifier = Modifier
+            .size(38.dp)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { onClick() })
+            },
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = "⚙",
+                color = Accent,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 
@@ -355,10 +398,247 @@ private fun StatusPill(
 }
 
 @Composable
+private fun ConnectionSettingsOverlay(
+    settings: AgentConnectionSettings,
+    onSave: (AgentConnectionSettings) -> Unit,
+    onClose: () -> Unit,
+) {
+    var baseUrl by remember(settings) { mutableStateOf(settings.baseUrl) }
+    var accessToken by remember(settings) { mutableStateOf(settings.accessToken) }
+    var deepseekApiKey by remember(settings) { mutableStateOf(settings.deepseekApiKey) }
+    var deepseekBaseUrl by remember(settings) { mutableStateOf(settings.deepseekBaseUrl) }
+    var deepseekModel by remember(settings) { mutableStateOf(settings.deepseekModel) }
+    var testRunning by remember { mutableStateOf(false) }
+    var testHealthy by remember { mutableStateOf<Boolean?>(null) }
+    var testLabel by remember { mutableStateOf("") }
+    var testDetail by remember { mutableStateOf("") }
+    val testHandler = remember { Handler(Looper.getMainLooper()) }
+    val normalizedBaseUrl = baseUrl.trim()
+    val urlValid = normalizedBaseUrl.startsWith("http://") || normalizedBaseUrl.startsWith("https://")
+    LaunchedEffect(normalizedBaseUrl, accessToken) {
+        testHealthy = null
+        testLabel = ""
+        testDetail = ""
+    }
+    Popup(
+        alignment = Alignment.Center,
+        properties = PopupProperties(
+            focusable = true,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+        ),
+        onDismissRequest = onClose,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White.copy(alpha = 0.94f))
+                .padding(horizontal = 22.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                color = Panel,
+                shape = RoundedCornerShape(28.dp),
+                shadowElevation = 20.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Divider, RoundedCornerShape(28.dp)),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(20.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        text = "连接",
+                        color = Ink,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = "后端负责 AI 转发和语音授权。测试只检查后端是否可达，不会提交 DeepSeek Key。",
+                        color = Muted,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                    OutlinedTextField(
+                        value = baseUrl,
+                        onValueChange = { baseUrl = it },
+                        label = { Text("后端 URL", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = accessToken,
+                        onValueChange = { accessToken = it },
+                        label = { Text("后端访问密钥", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = deepseekApiKey,
+                        onValueChange = { deepseekApiKey = it },
+                        label = { Text("DeepSeek API Key", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = deepseekBaseUrl,
+                            onValueChange = { deepseekBaseUrl = it },
+                            label = { Text("DeepSeek URL", fontSize = 12.sp) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1.35f),
+                        )
+                        OutlinedTextField(
+                            value = deepseekModel,
+                            onValueChange = { deepseekModel = it },
+                            label = { Text("模型", fontSize = 12.sp) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (!urlValid) {
+                        Text(
+                            text = "URL 需要以 http:// 或 https:// 开头",
+                            color = Danger,
+                            fontSize = 12.sp,
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            testRunning = true
+                            testHealthy = null
+                            testLabel = "正在测试"
+                            testDetail = normalizedBaseUrl
+                            val settingsToTest = AgentConnectionSettings(
+                                baseUrl = normalizedBaseUrl,
+                                accessToken = accessToken.trim(),
+                                deepseekApiKey = deepseekApiKey.trim(),
+                                deepseekBaseUrl = deepseekBaseUrl.trim().ifBlank { "https://api.deepseek.com/v1" },
+                                deepseekModel = deepseekModel.trim().ifBlank { "deepseek-v4-flash" },
+                            )
+                            Thread {
+                                val result = AgentApiClient(settingsToTest.toConfig()).testConnection()
+                                testHandler.post {
+                                    testRunning = false
+                                    testHealthy = result.healthy
+                                    testLabel = result.label
+                                    testDetail = result.detail
+                                }
+                            }.start()
+                        },
+                        enabled = urlValid && !testRunning,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AccentSoft,
+                            disabledContainerColor = AccentSoft.copy(alpha = 0.52f),
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                    ) {
+                        Text(
+                            text = if (testRunning) "测试中..." else "测试连接",
+                            color = Accent,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    if (testRunning || testHealthy != null) {
+                        val healthy = testHealthy
+                        val statusColor = when (healthy) {
+                            true -> Success
+                            false -> Danger
+                            null -> Accent
+                        }
+                        val statusBackground = when (healthy) {
+                            true -> SuccessSoft
+                            false -> DangerSoft
+                            null -> AccentSoft
+                        }
+                        Surface(
+                            color = statusBackground,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    text = testLabel,
+                                    color = statusColor,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (testDetail.isNotBlank()) {
+                                    Text(
+                                        text = testDetail,
+                                        color = Muted,
+                                        fontSize = 12.sp,
+                                        lineHeight = 16.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Button(
+                            onClick = onClose,
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp),
+                        ) {
+                            Text("关闭", color = Accent, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Button(
+                            onClick = {
+                                onSave(
+                                    AgentConnectionSettings(
+                                        baseUrl = normalizedBaseUrl,
+                                        accessToken = accessToken.trim(),
+                                        deepseekApiKey = deepseekApiKey.trim(),
+                                        deepseekBaseUrl = deepseekBaseUrl.trim().ifBlank { "https://api.deepseek.com/v1" },
+                                        deepseekModel = deepseekModel.trim().ifBlank { "deepseek-v4-flash" },
+                                    ),
+                                )
+                            },
+                            enabled = urlValid,
+                            colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp),
+                        ) {
+                            Text("保存", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TodayTimeline(
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
-    openSlots: List<OpenSlot>,
     onDeleteCommitment: (String) -> Unit,
 ) {
     val today = LocalDate.now()
@@ -366,45 +646,138 @@ private fun TodayTimeline(
     val upcomingEvents = events
         .filterAfter(today)
         .sortedWith(compareBy<ScheduleEvent> { it.date.ifBlank { today.toString() } }.thenBy { it.timeRange })
-        .take(4)
+        .take(3)
     val pendingTodos = todos.filterNot { it.done }
-    val todayTodos = pendingTodos.filterForDueDate(today)
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (todayEvents.isNotEmpty() || openSlots.isNotEmpty()) {
-            Surface(
-                color = Panel,
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Divider, RoundedCornerShape(18.dp)),
-            ) {
-                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+    val homeTodos = pendingTodos
+        .sortedByDueDate()
+        .take(7)
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        HomeScheduleSection(
+            todayEvents = todayEvents,
+            upcomingEvents = upcomingEvents,
+            onDeleteCommitment = onDeleteCommitment,
+        )
+        HomeTodoTimelineSection(
+            todos = homeTodos,
+            onDeleteCommitment = onDeleteCommitment,
+        )
+    }
+}
+
+@Composable
+private fun HomeScheduleSection(
+    todayEvents: List<ScheduleEvent>,
+    upcomingEvents: List<ScheduleEvent>,
+    onDeleteCommitment: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        HomeSectionLabel(
+            title = "日程",
+            caption = if (todayEvents.isEmpty()) "今天" else "今天 ${todayEvents.size}",
+        )
+        Surface(
+            color = Panel,
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Divider, RoundedCornerShape(18.dp)),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                if (todayEvents.isEmpty()) {
+                    QuietTimelineEmpty(text = "今天没有日程")
+                } else {
                     todayEvents.forEachIndexed { index, event ->
                         TimelineEventRow(
                             event = event,
-                            showConnector = index != todayEvents.lastIndex || openSlots.isNotEmpty(),
+                            showConnector = index != todayEvents.lastIndex,
                             onDelete = { onDeleteCommitment(event.id) },
                         )
                     }
-                    openSlots.take(2).forEach { slot ->
-                        CompactOpenSlotRow(slot = slot)
+                }
+                if (upcomingEvents.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 4.dp)
+                            .height(1.dp)
+                            .background(Divider),
+                    )
+                    upcomingEvents.forEach { event ->
+                        UpcomingEventRow(
+                            event = event,
+                            onDelete = { onDeleteCommitment(event.id) },
+                        )
                     }
                 }
             }
         }
-        if (todayTodos.isNotEmpty()) {
-            DeadlinePressureBlock(
-                todos = todayTodos.take(3),
-                onDeleteCommitment = onDeleteCommitment,
-            )
-        }
-        if (upcomingEvents.isNotEmpty()) {
-            UpcomingBlock(
-                events = upcomingEvents,
-                onDeleteCommitment = onDeleteCommitment,
-            )
+    }
+}
+
+@Composable
+private fun HomeTodoTimelineSection(
+    todos: List<TodoItem>,
+    onDeleteCommitment: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        HomeSectionLabel(
+            title = "待办",
+            caption = if (todos.isEmpty()) "" else "${todos.size}",
+        )
+        Surface(
+            color = AccentSoft.copy(alpha = 0.42f),
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFFD9E8EB), RoundedCornerShape(18.dp)),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                if (todos.isEmpty()) {
+                    QuietTimelineEmpty(text = "没有待办")
+                } else {
+                    todos.forEachIndexed { index, todo ->
+                        HomeTodoTimelineRow(
+                            todo = todo,
+                            showConnector = index != todos.lastIndex,
+                            onDelete = { onDeleteCommitment(todo.id) },
+                        )
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun HomeSectionLabel(
+    title: String,
+    caption: String,
+) {
+    Row(
+        modifier = Modifier.padding(horizontal = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            color = Ink,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (caption.isNotBlank()) {
+            Text(text = caption, color = Muted, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun QuietTimelineEmpty(text: String) {
+    Text(
+        text = text,
+        color = Muted,
+        fontSize = 14.sp,
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+    )
 }
 
 @Composable
@@ -490,11 +863,16 @@ private fun TimelineEventRow(
 }
 
 @Composable
-private fun CompactOpenSlotRow(slot: OpenSlot) {
+private fun HomeTodoTimelineRow(
+    todo: TodoItem,
+    showConnector: Boolean,
+    onDelete: () -> Unit,
+) {
+    val color = todo.priority.color()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -502,119 +880,55 @@ private fun CompactOpenSlotRow(slot: OpenSlot) {
             Box(
                 modifier = Modifier
                     .width(2.dp)
-                    .height(26.dp)
-                    .background(Divider, RoundedCornerShape(999.dp)),
+                    .height(9.dp)
+                    .background(Color(0xFFCADADD), RoundedCornerShape(999.dp)),
             )
             Box(
                 modifier = Modifier
-                    .size(8.dp)
-                    .border(2.dp, Divider, RoundedCornerShape(999.dp)),
+                    .size(10.dp)
+                    .border(2.dp, color, RoundedCornerShape(4.dp)),
+            )
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .height(if (showConnector) 22.dp else 9.dp)
+                    .background(Color(0xFFCADADD), RoundedCornerShape(999.dp)),
             )
         }
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = slot.timeRange, color = Muted, fontSize = 12.sp, modifier = Modifier.width(88.dp))
-            Text(text = "空档", color = Muted, fontSize = 14.sp, maxLines = 1)
-        }
-    }
-}
-
-@Composable
-private fun DeadlinePressureBlock(
-    todos: List<TodoItem>,
-    onDeleteCommitment: (String) -> Unit,
-) {
-    Surface(
-        color = RiskSoft,
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Color(0xFFF3D7A3), RoundedCornerShape(18.dp)),
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-            todos.forEach { todo ->
-                DeadlineRow(
-                    todo = todo,
-                    onDelete = { onDeleteCommitment(todo.id) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DeadlineRow(
-    todo: TodoItem,
-    onDelete: () -> Unit,
-) {
-    val color = todo.priority.color()
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Box(
-            modifier = Modifier
-                .padding(top = 3.dp)
-                .size(18.dp)
-                .border(2.dp, color, RoundedCornerShape(6.dp))
-                .background(if (todo.done) SuccessSoft else Color.Transparent, RoundedCornerShape(6.dp)),
+        Text(
+            text = todo.relativeDueLabel(),
+            color = color,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.width(52.dp),
         )
         Column(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(text = todo.title, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Text(text = todo.dueLabel, color = color, fontSize = 12.sp)
-            }
-            Text(
-                text = todo.detail,
-                color = InkSoft,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (todo.id.isNotBlank()) {
-                MiniDeleteButton(onClick = onDelete)
-            }
-        }
-    }
-}
-
-@Composable
-private fun UpcomingBlock(
-    events: List<ScheduleEvent>,
-    onDeleteCommitment: (String) -> Unit,
-) {
-    Surface(
-        color = Panel,
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Divider, RoundedCornerShape(18.dp)),
-    ) {
-        Column(
-            modifier = Modifier.padding(vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            events.forEach { event ->
-                UpcomingEventRow(
-                    event = event,
-                    onDelete = { onDeleteCommitment(event.id) },
+            Text(
+                text = todo.title,
+                color = Ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (todo.detail.isNotBlank()) {
+                Text(
+                    text = todo.detail,
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        if (todo.id.isNotBlank()) {
+            MiniDeleteButton(onClick = onDelete)
         }
     }
 }
@@ -666,15 +980,27 @@ private fun CalendarSurface(
     onDeleteCommitment: (String) -> Unit,
 ) {
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
+    var visibleMonth by remember { mutableStateOf(YearMonth.now()) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        val month = remember(events) {
-            events.firstNotNullOfOrNull { event ->
-                runCatching { YearMonth.from(LocalDate.parse(event.date)) }.getOrNull()
-            } ?: YearMonth.now()
-        }
-        SectionHeader(title = "${month.year}年${month.monthValue}月", caption = "")
+        MonthSwitcher(
+            month = visibleMonth,
+            onPrevious = {
+                val nextMonth = visibleMonth.minusMonths(1)
+                visibleMonth = nextMonth
+                selectedDate = nextMonth.atDay(1)
+            },
+            onNext = {
+                val nextMonth = visibleMonth.plusMonths(1)
+                visibleMonth = nextMonth
+                selectedDate = nextMonth.atDay(1)
+            },
+            onToday = {
+                visibleMonth = YearMonth.now()
+                selectedDate = LocalDate.now()
+            },
+        )
         CalendarMonthGrid(
-            month = month,
+            month = visibleMonth,
             events = events,
             todos = todos,
             selectedDate = selectedDate,
@@ -701,6 +1027,32 @@ private fun CalendarSurface(
                     onDelete = { onDeleteCommitment(todo.id) },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun MonthSwitcher(
+    month: YearMonth,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onToday: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextAction(text = "‹", onClick = onPrevious)
+        Text(
+            text = "${month.year}年${month.monthValue}月",
+            color = Ink,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextAction(text = "今天", onClick = onToday)
+            TextAction(text = "›", onClick = onNext)
         }
     }
 }
@@ -844,11 +1196,26 @@ private fun TodoSurface(
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
 ) {
-    val active = todos.filterNot { it.done }
-    val done = todos.filter { it.done }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    var query by remember { mutableStateOf("") }
+    val normalizedQuery = query.trim()
+    val active = todos
+        .filterNot { it.done }
+        .filter { it.matchesTodoQuery(normalizedQuery) }
+        .sortedByDueDate()
+    val done = todos
+        .filter { it.done }
+        .filter { it.matchesTodoQuery(normalizedQuery) }
+        .sortedByDueDate()
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TodoSearchField(
+            query = query,
+            onQueryChange = { query = it },
+        )
         if (active.isEmpty() && done.isEmpty()) {
-            EmptyState(title = "—", detail = "")
+            EmptyState(
+                title = if (normalizedQuery.isBlank()) "—" else "没有匹配",
+                detail = if (normalizedQuery.isBlank()) "" else normalizedQuery,
+            )
         } else {
             active.forEach { todo ->
                 TodoCard(
@@ -866,6 +1233,23 @@ private fun TodoSurface(
             }
         }
     }
+}
+
+@Composable
+private fun TodoSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        label = { Text("搜索待办", fontSize = 12.sp) },
+        singleLine = true,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp),
+    )
 }
 
 @Composable
@@ -1093,6 +1477,9 @@ private fun BottomWorkspace(
     onTodoSelected: () -> Unit,
     agentApiClient: AgentApiClient?,
     asrClient: RealtimeAsrClient?,
+    connectionSettings: AgentConnectionSettings,
+    commitmentsProvider: () -> AgentCommitmentsPayload,
+    proposalApplier: (AgentProposal) -> AgentApplyResult,
     onCommitmentsChanged: () -> Unit,
 ) {
     Surface(
@@ -1116,6 +1503,9 @@ private fun BottomWorkspace(
                 onTodoSelected = onTodoSelected,
                 agentApiClient = agentApiClient,
                 asrClient = asrClient,
+                connectionSettings = connectionSettings,
+                commitmentsProvider = commitmentsProvider,
+                proposalApplier = proposalApplier,
                 onCommitmentsChanged = onCommitmentsChanged,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1131,6 +1521,9 @@ private fun VoiceAgentDock(
     onTodoSelected: () -> Unit,
     agentApiClient: AgentApiClient?,
     asrClient: RealtimeAsrClient?,
+    connectionSettings: AgentConnectionSettings,
+    commitmentsProvider: () -> AgentCommitmentsPayload,
+    proposalApplier: (AgentProposal) -> AgentApplyResult,
     onCommitmentsChanged: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1163,7 +1556,11 @@ private fun VoiceAgentDock(
         activeRequestId += 1
         val requestId = activeRequestId
         Thread {
-            val result = client.propose(prompt)
+            val result = client.propose(
+                text = prompt,
+                commitments = commitmentsProvider(),
+                settings = connectionSettings,
+            )
             mainHandler.post {
                 if (requestId != activeRequestId) {
                     return@post
@@ -1199,27 +1596,12 @@ private fun VoiceAgentDock(
                 cancelArmed = voiceCancelArmed,
                 canCancelVoice = isListening,
                 proposal = proposal,
-                onConfirm = { editedProposal, edited ->
+                onConfirm = { editedProposal, _ ->
                     val current = editedProposal
-                    val client = agentApiClient
-                    if (client == null) {
-                        phase = ComposerPhase.Error
-                        status = "后端未连接"
-                        return@VoiceInteractionOverlay
-                    }
                     phase = ComposerPhase.Confirming
                     status = "确认中"
                     Thread {
-                        val editResult = if (shouldEditProposalBeforeConfirm(current, edited)) {
-                            client.editProposal(current)
-                        } else {
-                            AgentSubmitResult(proposal = current, error = null)
-                        }
-                        val result = if (editResult.error == null) {
-                            client.confirm(editResult.proposal?.id ?: current.id)
-                        } else {
-                            AgentApplyResult(status = "failed", commitmentId = "", error = editResult.error)
-                        }
+                        val result = proposalApplier(current)
                         mainHandler.post {
                             proposal = null
                             status = result.error ?: "已确认并刷新"
@@ -1310,13 +1692,17 @@ private fun VoiceAgentDock(
                 voiceCancelArmed = false
                 phase = ComposerPhase.Working
                 status = "正在收尾"
-                client?.stop()
-                mainHandler.postDelayed(
-                    {
+                if (client == null) {
+                    status = "语音暂不可用"
+                    phase = ComposerPhase.Error
+                    return@BottomVoiceNav
+                }
+                client.stopAndAwaitFinal(timeoutMillis = 1800L) { finalText ->
+                    mainHandler.post {
                         if (releaseRequestId != activeRequestId) {
-                            return@postDelayed
+                            return@post
                         }
-                        val text = voiceText.trim()
+                        val text = finalText.ifBlank { voiceText }.trim()
                         if (text.isNotBlank()) {
                             status = "正在整理"
                             submit(text)
@@ -1324,9 +1710,8 @@ private fun VoiceAgentDock(
                             status = "没有识别到内容"
                             phase = ComposerPhase.Error
                         }
-                    },
-                    1200L,
-                )
+                    }
+                }
             },
             onCancel = {
                 activeRequestId += 1
@@ -1382,8 +1767,7 @@ private fun VoiceInteractionOverlay(
                 verticalArrangement = Arrangement.spacedBy(22.dp),
             ) {
                 val proposalReviewVisible = phase == ComposerPhase.ProposalReady &&
-                    proposal != null &&
-                    proposal.candidates.isEmpty()
+                    proposal?.presentation() == ProposalPresentation.Confirmable
                 if (!proposalReviewVisible) {
                     LargeVoiceWave(
                         active = phase == ComposerPhase.Working ||
@@ -1398,22 +1782,26 @@ private fun VoiceInteractionOverlay(
                         proposal = proposal,
                     )
                 }
+                when (proposal?.takeIf { phase == ComposerPhase.ProposalReady }?.presentation()) {
+                    ProposalPresentation.CandidateChoice -> CandidateChoiceList(
+                        candidates = proposal.candidates,
+                        onCandidateSelected = onCandidateSelected,
+                    )
+
+                    ProposalPresentation.Confirmable -> ProposalReviewPanel(
+                        proposal = proposal,
+                        onConfirm = onConfirm,
+                        onClose = onCancel,
+                    )
+
+                    ProposalPresentation.ResultOnly -> ProposalResultPanel(
+                        proposal = proposal,
+                        onClose = onCancel,
+                    )
+
+                    null -> Unit
+                }
                 when {
-                    phase == ComposerPhase.ProposalReady && proposal != null && proposal.candidates.isNotEmpty() -> {
-                        CandidateChoiceList(
-                            candidates = proposal.candidates,
-                            onCandidateSelected = onCandidateSelected,
-                        )
-                    }
-
-                    phase == ComposerPhase.ProposalReady && proposal != null -> {
-                        ProposalReviewPanel(
-                            proposal = proposal,
-                            onConfirm = onConfirm,
-                            onClose = onCancel,
-                        )
-                    }
-
                     phase == ComposerPhase.Error -> {
                         Button(
                             onClick = onCancel,
@@ -1629,6 +2017,58 @@ private fun ProposalReadOnlySummary(proposal: AgentProposal) {
             Text(text = patch.due, color = InkSoft, fontSize = 17.sp, fontWeight = FontWeight.Medium)
             if (patch.notes.isNotBlank()) {
                 Text(text = patch.notes, color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (proposal.schedulePatch == null && proposal.todoPatch == null) {
+            Text(
+                text = proposal.summary.ifBlank { proposal.impact },
+                color = InkSoft,
+                fontSize = 17.sp,
+                lineHeight = 23.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProposalResultPanel(
+    proposal: AgentProposal,
+    onClose: () -> Unit,
+) {
+    Surface(
+        color = Color.White.copy(alpha = 0.92f),
+        shape = RoundedCornerShape(28.dp),
+        shadowElevation = 18.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(28.dp)),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = proposal.title,
+                color = Ink,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 29.sp,
+            )
+            Text(
+                text = proposal.summary,
+                color = InkSoft,
+                fontSize = 17.sp,
+                lineHeight = 24.sp,
+            )
+            Button(
+                onClick = onClose,
+                colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+            ) {
+                Text("关闭", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -2185,6 +2625,14 @@ private fun TodoPriority.label(): String {
     }
 }
 
+private fun TodoPriority.sortWeight(): Int {
+    return when (this) {
+        TodoPriority.High -> 0
+        TodoPriority.Medium -> 1
+        TodoPriority.Low -> 2
+    }
+}
+
 private fun AgentProposal.toEditableDraft(): EditableProposalDraft {
     schedulePatch?.let { patch ->
         return EditableProposalDraft(
@@ -2245,9 +2693,12 @@ private fun List<ScheduleEvent>.filterForDate(date: LocalDate): List<ScheduleEve
     return filter { event -> event.date.isBlank() || event.date == key }
 }
 
-private fun List<TodoItem>.filterForDueDate(date: LocalDate): List<TodoItem> {
-    val key = date.toString()
-    return filter { todo -> todo.dueDate.isBlank() || todo.dueDate == key }
+private fun List<TodoItem>.sortedByDueDate(): List<TodoItem> {
+    return sortedWith(
+        compareBy<TodoItem> { todo ->
+            runCatching { LocalDate.parse(todo.dueDate) }.getOrNull() ?: LocalDate.MAX
+        }.thenBy { todo -> todo.priority.sortWeight() },
+    )
 }
 
 private fun List<ScheduleEvent>.filterAfter(date: LocalDate): List<ScheduleEvent> {
@@ -2264,4 +2715,28 @@ private fun ScheduleEvent.relativeDateLabel(): String {
         today.plusDays(2) -> "后天"
         else -> "${eventDate.monthValue}/${eventDate.dayOfMonth}"
     }
+}
+
+private fun TodoItem.relativeDueLabel(): String {
+    val due = runCatching { LocalDate.parse(dueDate) }.getOrNull() ?: return dueLabel
+    val today = LocalDate.now()
+    return when (due) {
+        today -> "今天"
+        today.plusDays(1) -> "明天"
+        today.plusDays(2) -> "后天"
+        else -> "${due.monthValue}/${due.dayOfMonth}"
+    }
+}
+
+private fun TodoItem.matchesTodoQuery(query: String): Boolean {
+    if (query.isBlank()) return true
+    val haystack = listOf(
+        title,
+        dueDate,
+        dueLabel,
+        detail,
+        tag,
+        priority.label(),
+    ).joinToString(" ")
+    return haystack.contains(query, ignoreCase = true)
 }

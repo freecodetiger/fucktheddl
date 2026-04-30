@@ -1,6 +1,7 @@
 from datetime import date
 from pathlib import Path
 
+from fucktheddl_agent.config import ModelSettings
 from fucktheddl_agent.model_gateway import ModelGateway
 from fucktheddl_agent.schemas import AgentRequest, AgentResponse, ApplyResponse, CommitmentsResponse, Proposal, ProposalEditRequest
 from fucktheddl_agent.storage import ScheduleStore
@@ -14,19 +15,24 @@ class AgentService:
         self._model_gateway = model_gateway
 
     def propose(self, request: AgentRequest) -> AgentResponse:
-        model_extraction = self._model_gateway.extract_commitment(request.text) if self._model_gateway else None
+        model_extraction = self._model_gateway.extract_commitment(
+            request.text,
+            settings=_request_model_settings(request),
+        ) if self._model_gateway else None
+        commitments = request.commitments if request.commitments is not None else self._store.list_commitments()
         state = self._graph.invoke(
             {
                 "text": request.text,
                 "session_id": request.session_id,
                 "timezone": request.timezone,
                 "model_extraction": model_extraction,
-                "commitments": self._store.list_commitments(),
+                "commitments": commitments,
             },
             config={"configurable": {"thread_id": request.session_id}},
         )
         response = to_response(state)
-        self._store.save_proposal(response.proposal)
+        if request.commitments is None:
+            self._store.save_proposal(response.proposal)
         return response
 
     def confirm(self, proposal_id: str) -> ApplyResponse | None:
@@ -60,6 +66,25 @@ class AgentService:
             proposal.todo_patch = request.todo_patch
             proposal.title = request.title or request.todo_patch.title
             proposal.summary = request.summary or _todo_summary(request.todo_patch.title, request.todo_patch.due)
+        elif proposal.commitment_type == "update" and proposal.update_patch is not None and request.schedule_patch is not None:
+            proposal.schedule_patch = request.schedule_patch
+            proposal.update_patch.schedule_patch = request.schedule_patch
+            proposal.update_patch.todo_patch = None
+            proposal.title = request.title or request.schedule_patch.title
+            proposal.summary = request.summary or _update_schedule_summary(
+                proposal.update_patch.target_title,
+                request.schedule_patch.start,
+                request.schedule_patch.end,
+            )
+        elif proposal.commitment_type == "update" and proposal.update_patch is not None and request.todo_patch is not None:
+            proposal.todo_patch = request.todo_patch
+            proposal.update_patch.todo_patch = request.todo_patch
+            proposal.update_patch.schedule_patch = None
+            proposal.title = request.title or request.todo_patch.title
+            proposal.summary = request.summary or _update_todo_summary(
+                proposal.update_patch.target_title,
+                request.todo_patch.due,
+            )
         else:
             return None
         self._store.save_proposal(proposal)
@@ -86,8 +111,28 @@ def _schedule_summary(title: str, start: str, end: str) -> str:
     return f"准备创建日程：{title}，{_date_time_label(start, end)}。"
 
 
+def _request_model_settings(request: AgentRequest) -> ModelSettings | None:
+    if not request.model_api_key:
+        return None
+    return ModelSettings(
+        api_key=request.model_api_key,
+        base_url=request.model_base_url or "https://api.deepseek.com/v1",
+        model=request.model or "deepseek-v4-flash",
+        enabled=True,
+        disable_thinking=request.disable_thinking,
+    )
+
+
 def _todo_summary(title: str, due: str) -> str:
     return f"准备创建待办：{title}，截止到{due}。"
+
+
+def _update_schedule_summary(title: str, start: str, end: str) -> str:
+    return f"准备修改日程：{title}，调整为{_date_time_label(start, end)}。"
+
+
+def _update_todo_summary(title: str, due: str) -> str:
+    return f"准备修改待办：{title}，截止到{due}。"
 
 
 def _date_time_label(start: str, end: str) -> str:

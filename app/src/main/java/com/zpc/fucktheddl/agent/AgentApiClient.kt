@@ -9,12 +9,63 @@ import java.net.URL
 class AgentApiClient(
     private val config: AgentApiConfig,
 ) {
-    fun propose(text: String, sessionId: String = "android"): AgentSubmitResult {
+    fun testConnection(): AgentConnectionTestResult {
+        return try {
+            val connection = URL(config.normalizedBaseUrl + "health").openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 8000
+            connection.applyAuth()
+            val responseCode = connection.responseCode
+            val text = connection.responseText()
+            if (responseCode in 200..299) {
+                val status = text.extractJsonString("status")
+                val framework = text.extractJsonString("agent_framework")
+                val modelName = text.extractJsonString("model")
+                val thinkingDisabled = text.extractJsonBoolean("disable_thinking")
+                AgentConnectionTestResult(
+                    healthy = true,
+                    label = if (status == "ok") "后端连接正常" else "后端已响应",
+                    detail = listOfNotNull(
+                        framework.takeIf { it.isNotBlank() }?.let { "Agent: $it" },
+                        modelName.takeIf { it.isNotBlank() }?.let { "模型: $it" },
+                        thinkingDisabled?.let { if (it) "思考: 关闭" else "思考: 开启" },
+                    ).joinToString(" · "),
+                )
+            } else {
+                AgentConnectionTestResult(
+                    healthy = false,
+                    label = "连接失败",
+                    detail = "HTTP $responseCode${text.safeErrorSummary()}",
+                )
+            }
+        } catch (error: Exception) {
+            AgentConnectionTestResult(
+                healthy = false,
+                label = "无法连接后端",
+                detail = error.message?.take(120).orEmpty(),
+            )
+        }
+    }
+
+    fun propose(
+        text: String,
+        sessionId: String = "android",
+        commitments: AgentCommitmentsPayload? = null,
+        settings: AgentConnectionSettings? = null,
+    ): AgentSubmitResult {
         return try {
             val body = JSONObject()
                 .put("text", text)
                 .put("session_id", sessionId)
                 .put("timezone", "Asia/Shanghai")
+            commitments?.let { body.put("commitments", it.toJson()) }
+            settings?.takeIf { it.deepseekApiKey.isNotBlank() }?.let {
+                body.put("model_api_key", it.deepseekApiKey.trim())
+                    .put("model_base_url", it.deepseekBaseUrl.trim())
+                    .put("model", it.deepseekModel.trim())
+                    .put("disable_thinking", true)
+            }
             val response = postJson("agent/propose", body)
             AgentSubmitResult(
                 proposal = parseProposal(response.getJSONObject("proposal")),
@@ -49,6 +100,7 @@ class AgentApiClient(
         connection.requestMethod = "GET"
         connection.connectTimeout = 5000
         connection.readTimeout = 10000
+        connection.applyAuth()
         val text = connection.inputStream.bufferedReader().readText()
         return parseCommitments(JSONObject(text))
     }
@@ -58,6 +110,7 @@ class AgentApiClient(
         connection.requestMethod = "GET"
         connection.connectTimeout = 5000
         connection.readTimeout = 10000
+        connection.applyAuth()
         return JSONObject(connection.inputStream.bufferedReader().readText())
     }
 
@@ -68,6 +121,7 @@ class AgentApiClient(
         connection.connectTimeout = 5000
         connection.readTimeout = 20000
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        connection.applyAuth()
         OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
             writer.write(body.toString())
         }
@@ -95,6 +149,72 @@ class AgentApiClient(
             AgentApplyResult(status = "failed", commitmentId = "", error = error.message)
         }
     }
+
+    private fun HttpURLConnection.applyAuth() {
+        if (config.accessToken.isNotBlank()) {
+            setRequestProperty("X-Agent-Token", config.accessToken)
+        }
+    }
+
+    private fun HttpURLConnection.responseText(): String {
+        val stream = if (responseCode in 200..299) inputStream else errorStream
+        return stream?.bufferedReader()?.readText().orEmpty()
+    }
+}
+
+private fun String.safeErrorSummary(): String {
+    val summary = trim()
+        .replace(Regex("\"model_api_key\"\\s*:\\s*\"[^\"]*\""), "\"model_api_key\":\"***\"")
+        .replace(Regex("\"api_key\"\\s*:\\s*\"[^\"]*\""), "\"api_key\":\"***\"")
+        .take(140)
+    return if (summary.isBlank()) "" else " · $summary"
+}
+
+private fun String.extractJsonString(field: String): String {
+    val pattern = Regex("\"${Regex.escape(field)}\"\\s*:\\s*\"([^\"]*)\"")
+    return pattern.find(this)?.groupValues?.getOrNull(1).orEmpty()
+}
+
+private fun String.extractJsonBoolean(field: String): Boolean? {
+    val pattern = Regex("\"${Regex.escape(field)}\"\\s*:\\s*(true|false)")
+    return pattern.find(this)?.groupValues?.getOrNull(1)?.toBooleanStrictOrNull()
+}
+
+private fun AgentCommitmentsPayload.toJson(): JSONObject {
+    return JSONObject()
+        .put(
+            "events",
+            JSONArray(
+                events.map { event ->
+                    JSONObject()
+                        .put("id", event.id)
+                        .put("title", event.title)
+                        .put("start", event.start)
+                        .put("end", event.end)
+                        .put("timezone", "Asia/Shanghai")
+                        .put("status", event.status)
+                        .put("location", event.location)
+                        .put("notes", event.notes)
+                        .put("tags", JSONArray(event.tags))
+                },
+            ),
+        )
+        .put(
+            "todos",
+            JSONArray(
+                todos.map { todo ->
+                    JSONObject()
+                        .put("id", todo.id)
+                        .put("title", todo.title)
+                        .put("due", todo.due)
+                        .put("timezone", "Asia/Shanghai")
+                        .put("status", todo.status)
+                        .put("priority", todo.priority)
+                        .put("notes", todo.notes)
+                        .put("tags", JSONArray(todo.tags))
+                },
+            ),
+        )
 }
 
 internal fun AgentProposal.toEditRequestJson(): JSONObject {
@@ -146,6 +266,8 @@ private fun parseProposal(proposalJson: JSONObject): AgentProposal {
         requiresConfirmation = proposalJson.getBoolean("requires_confirmation"),
         schedulePatch = proposalJson.optSchedulePatch("schedule_patch"),
         todoPatch = proposalJson.optTodoPatch("todo_patch"),
+        deletePatch = proposalJson.optDeletePatch("delete_patch"),
+        updatePatch = proposalJson.optUpdatePatch("update_patch"),
         candidates = proposalJson.optCandidateList("candidates"),
     )
 }
@@ -203,6 +325,26 @@ private fun JSONObject.optTodoPatch(name: String): AgentTodoPatch? {
         priority = item.optString("priority", "medium"),
         notes = item.optString("notes", ""),
         tags = item.optStringList("tags"),
+    )
+}
+
+private fun JSONObject.optDeletePatch(name: String): AgentDeletePatch? {
+    val item = optJSONObject(name) ?: return null
+    return AgentDeletePatch(
+        targetId = item.optString("target_id", ""),
+        targetType = item.optString("target_type", ""),
+        targetTitle = item.optString("target_title", ""),
+    )
+}
+
+private fun JSONObject.optUpdatePatch(name: String): AgentUpdatePatch? {
+    val item = optJSONObject(name) ?: return null
+    return AgentUpdatePatch(
+        targetId = item.optString("target_id", ""),
+        targetType = item.optString("target_type", ""),
+        targetTitle = item.optString("target_title", ""),
+        schedulePatch = item.optSchedulePatch("schedule_patch"),
+        todoPatch = item.optTodoPatch("todo_patch"),
     )
 }
 

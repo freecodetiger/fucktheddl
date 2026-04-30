@@ -2,9 +2,23 @@ package com.zpc.fucktheddl.agent
 
 data class AgentApiConfig(
     val baseUrl: String,
+    val accessToken: String = "",
 ) {
     val normalizedBaseUrl: String =
         if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+}
+
+data class AgentConnectionSettings(
+    val baseUrl: String,
+    val accessToken: String = "",
+    val deepseekApiKey: String = "",
+    val deepseekBaseUrl: String = "https://api.deepseek.com/v1",
+    val deepseekModel: String = "deepseek-v4-flash",
+) {
+    fun toConfig(): AgentApiConfig = AgentApiConfig(
+        baseUrl = baseUrl.trim(),
+        accessToken = accessToken.trim(),
+    )
 }
 
 enum class CommitmentType {
@@ -26,8 +40,16 @@ data class AgentProposal(
     val requiresConfirmation: Boolean,
     val schedulePatch: AgentSchedulePatch? = null,
     val todoPatch: AgentTodoPatch? = null,
+    val deletePatch: AgentDeletePatch? = null,
+    val updatePatch: AgentUpdatePatch? = null,
     val candidates: List<AgentProposalCandidate> = emptyList(),
 )
+
+enum class ProposalPresentation {
+    CandidateChoice,
+    Confirmable,
+    ResultOnly,
+}
 
 data class AgentSchedulePatch(
     val title: String,
@@ -48,6 +70,20 @@ data class AgentTodoPatch(
     val tags: List<String>,
 )
 
+data class AgentDeletePatch(
+    val targetId: String,
+    val targetType: String,
+    val targetTitle: String,
+)
+
+data class AgentUpdatePatch(
+    val targetId: String,
+    val targetType: String,
+    val targetTitle: String,
+    val schedulePatch: AgentSchedulePatch? = null,
+    val todoPatch: AgentTodoPatch? = null,
+)
+
 data class AgentProposalCandidate(
     val id: String,
     val targetType: String,
@@ -66,6 +102,12 @@ data class AgentApplyResult(
     val status: String,
     val commitmentId: String,
     val error: String?,
+)
+
+data class AgentConnectionTestResult(
+    val healthy: Boolean,
+    val label: String,
+    val detail: String = "",
 )
 
 data class AgentCommitmentsPayload(
@@ -93,3 +135,11 @@ data class BackendTodoItem(
     val notes: String,
     val tags: List<String>,
 )
+
+fun AgentProposal.presentation(): ProposalPresentation {
+    return when {
+        candidates.isNotEmpty() -> ProposalPresentation.CandidateChoice
+        requiresConfirmation -> ProposalPresentation.Confirmable
+        else -> ProposalPresentation.ResultOnly
+    }
+}

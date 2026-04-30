@@ -3,6 +3,13 @@ package com.zpc.fucktheddl.voice
 interface RealtimeAsrClient {
     fun start(callback: RealtimeAsrCallback)
     fun stop()
+    fun stopAndAwaitFinal(timeoutMillis: Long = 1200L, onComplete: (String) -> Unit) {
+        stop()
+        Thread {
+            Thread.sleep(timeoutMillis)
+            onComplete("")
+        }.start()
+    }
     fun cancel() {
         stop()
     }
@@ -37,6 +44,14 @@ class VoiceInputController(
 
     fun stop() {
         asrClient.stop()
+    }
+
+    fun stopAndAwaitFinal(timeoutMillis: Long = 1200L) {
+        state = state.copy(recording = false, readyToSubmit = false)
+        asrClient.stopAndAwaitFinal(timeoutMillis) { text ->
+            val finalText = text.ifBlank { state.draftText }
+            onFinal(finalText)
+        }
     }
 
     override fun onPartial(text: String) {

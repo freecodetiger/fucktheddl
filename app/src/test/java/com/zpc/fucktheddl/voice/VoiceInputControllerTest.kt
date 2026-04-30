@@ -44,11 +44,42 @@ class VoiceInputControllerTest {
         assertEquals("周五前完成", controller.state.draftText)
         assertEquals("network failed", controller.state.error)
     }
+
+    @Test
+    fun stopWaitsForFinalResultBeforeMarkingReady() {
+        val fakeClient = FakeRealtimeAsrClient()
+        val controller = VoiceInputController(fakeClient)
+
+        controller.start()
+        controller.onPartial("明天下午三点")
+        controller.stopAndAwaitFinal(timeoutMillis = 1000)
+        assertFalse(controller.state.readyToSubmit)
+
+        fakeClient.completeStop("明天下午三点开会")
+
+        assertEquals("明天下午三点开会", controller.state.finalText)
+        assertTrue(controller.state.readyToSubmit)
+    }
 }
 
 private class FakeRealtimeAsrClient : RealtimeAsrClient {
-    override fun start(callback: RealtimeAsrCallback) = Unit
+    private var callback: RealtimeAsrCallback? = null
+    private var stopCompletion: ((String) -> Unit)? = null
+
+    override fun start(callback: RealtimeAsrCallback) {
+        this.callback = callback
+    }
+
     override fun stop() = Unit
+
+    override fun stopAndAwaitFinal(timeoutMillis: Long, onComplete: (String) -> Unit) {
+        stopCompletion = onComplete
+    }
+
+    fun completeStop(text: String) {
+        callback?.onFinal(text)
+        stopCompletion?.invoke(text)
+    }
+
     override fun release() = Unit
 }
-

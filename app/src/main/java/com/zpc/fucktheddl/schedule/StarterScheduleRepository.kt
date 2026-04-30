@@ -59,16 +59,7 @@ class StarterScheduleRepository {
                     done = true,
                 ),
             ),
-            openSlots = listOf(
-                OpenSlot(
-                    timeRange = "10:30 - 11:30",
-                    suggestion = "适合处理短小的行政杂事。",
-                ),
-                OpenSlot(
-                    timeRange = "16:00 - 17:00",
-                    suggestion = "适合重新排期或补录安排。",
-                ),
-            ),
+            openSlots = emptyList(),
             agentState = AgentState(
                 status = "正在生成待确认方案",
                 activeChain = listOf(

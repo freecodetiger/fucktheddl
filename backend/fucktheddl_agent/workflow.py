@@ -58,12 +58,12 @@ def classify_intent(state: AgentGraphState) -> AgentGraphState:
     text = state["text"]
     model_extraction = state.get("model_extraction")
     heuristic = _heuristic_classification(text)
-    if heuristic["commitment_type"] in {"delete", "update", "query", "suggestion"}:
-        return {**state, **heuristic}
     if isinstance(model_extraction, dict) and model_extraction:
         commitment_type = str(model_extraction.get("commitment_type", "clarify"))
-        if commitment_type not in {"schedule", "todo", "clarify"}:
+        if commitment_type not in {"schedule", "todo", "delete", "update", "query", "suggestion", "clarify"}:
             commitment_type = "clarify"
+        if heuristic["commitment_type"] in {"delete", "update", "query", "suggestion"}:
+            commitment_type = heuristic["commitment_type"]
         if commitment_type == "clarify" and heuristic["commitment_type"] != "clarify":
             commitment_type = heuristic["commitment_type"]
         return {
@@ -83,7 +83,7 @@ def classify_intent(state: AgentGraphState) -> AgentGraphState:
 
 
 def _heuristic_classification(text: str) -> AgentGraphState:
-    if any(token in text for token in ("删除", "删掉", "取消", "移除")):
+    if any(token in text for token in ("删除", "删掉", "取消", "移除", "撤销", "去掉")):
         return {
             "commitment_type": "delete",
             "title": _compact_title(text),

@@ -14,7 +14,7 @@ class StarterScheduleRepositoryTest {
         assertEquals("今天", state.selectedTab.label)
         assertTrue(state.events.isNotEmpty())
         assertTrue(state.todos.isNotEmpty())
-        assertTrue(state.openSlots.isNotEmpty())
+        assertTrue(state.openSlots.isEmpty())
         assertEquals("clean", state.syncState.kind)
         assertEquals("proposal_required", state.agentState.writePolicy)
     }

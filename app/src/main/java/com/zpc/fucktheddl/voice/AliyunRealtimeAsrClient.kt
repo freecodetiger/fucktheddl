@@ -14,6 +14,8 @@ import com.alibaba.idst.nui.KwsResult
 import com.alibaba.idst.nui.NativeNui
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AliyunRealtimeAsrClient(
@@ -27,9 +29,12 @@ class AliyunRealtimeAsrClient(
     private var callback: RealtimeAsrCallback? = null
     private var cachedSession: JSONObject? = null
     private var cachedSessionAtMillis: Long = 0L
+    @Volatile
+    private var lastRecognizedText: String = ""
 
     override fun start(callback: RealtimeAsrCallback) {
         this.callback = callback
+        lastRecognizedText = ""
         Thread {
             runCatching {
                 ensurePermission()
@@ -53,15 +58,46 @@ class AliyunRealtimeAsrClient(
         }.start()
     }
 
+    override fun stopAndAwaitFinal(timeoutMillis: Long, onComplete: (String) -> Unit) {
+        Thread {
+            val finalLatch = CountDownLatch(1)
+            val previousCallback = callback
+            callback = object : RealtimeAsrCallback {
+                override fun onPartial(text: String) {
+                    lastRecognizedText = text
+                    previousCallback?.onPartial(text)
+                }
+
+                override fun onFinal(text: String) {
+                    lastRecognizedText = text
+                    previousCallback?.onFinal(text)
+                    finalLatch.countDown()
+                }
+
+                override fun onError(message: String) {
+                    previousCallback?.onError(message)
+                    finalLatch.countDown()
+                }
+            }
+            nui.stopDialog()
+            finalLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)
+            stopRecorder()
+            callback = previousCallback
+            onComplete(lastRecognizedText)
+        }.start()
+    }
+
     override fun cancel() {
         Thread {
             nui.cancelDialog()
             stopRecorder()
+            lastRecognizedText = ""
         }.start()
     }
 
     override fun release() {
         stopRecorder()
+        lastRecognizedText = ""
         nui.release()
         initialized = false
     }
@@ -161,10 +197,20 @@ class AliyunRealtimeAsrClient(
         ) {
             val text = extractAsrText(asrResult?.asrResult.orEmpty())
             when (event) {
-                Constants.NuiEvent.EVENT_ASR_PARTIAL_RESULT -> if (text.isNotBlank()) callback?.onPartial(text) else Unit
+                Constants.NuiEvent.EVENT_ASR_PARTIAL_RESULT -> if (text.isNotBlank()) {
+                    lastRecognizedText = text
+                    callback?.onPartial(text)
+                } else {
+                    Unit
+                }
                 Constants.NuiEvent.EVENT_SENTENCE_END,
                 Constants.NuiEvent.EVENT_ASR_RESULT,
-                -> if (text.isNotBlank()) callback?.onFinal(text) else Unit
+                -> if (text.isNotBlank()) {
+                    lastRecognizedText = text
+                    callback?.onFinal(text)
+                } else {
+                    Unit
+                }
                 Constants.NuiEvent.EVENT_ASR_ERROR,
                 Constants.NuiEvent.EVENT_MIC_ERROR,
                 Constants.NuiEvent.EVENT_DIALOG_ERROR,

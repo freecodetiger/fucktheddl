@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,6 +12,11 @@ class AgentRequest(BaseModel):
     text: str = Field(min_length=1)
     session_id: str = Field(default="default")
     timezone: str = Field(default="Asia/Shanghai")
+    commitments: dict[str, list[dict[str, Any]]] | None = None
+    model_api_key: str | None = None
+    model_base_url: str | None = None
+    model: str | None = None
+    disable_thinking: bool = True
 
 
 class ChainStep(BaseModel):
