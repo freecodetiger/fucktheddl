@@ -1,6 +1,19 @@
 [
   {
     "created_at": "2026-04-29T00:00:00+08:00",
+    "due": "2026-05-02",
+    "id": "todo_20260502_完成计算机网络和操作系统",
+    "notes": "",
+    "priority": "high",
+    "source_text": "完成计算机网络和操作系统",
+    "status": "active",
+    "tags": [],
+    "timezone": "Asia/Shanghai",
+    "title": "完成计算机网络和操作系统",
+    "updated_at": "2026-04-29T00:00:00+08:00"
+  },
+  {
+    "created_at": "2026-04-29T00:00:00+08:00",
     "due": "2026-05-04",
     "id": "todo_20260504_简历复盘",
     "notes": "",
