@@ -27,6 +27,19 @@
   },
   {
     "created_at": "2026-04-29T00:00:00+08:00",
+    "due": "2026-05-05",
+    "id": "todo_20260505_完成人机交互课程作业",
+    "notes": "",
+    "priority": "medium",
+    "source_text": "完成人机交互课程作业",
+    "status": "active",
+    "tags": [],
+    "timezone": "Asia/Shanghai",
+    "title": "完成人机交互课程作业",
+    "updated_at": "2026-04-29T00:00:00+08:00"
+  },
+  {
+    "created_at": "2026-04-29T00:00:00+08:00",
     "due": "2026-05-06",
     "id": "todo_20260506_完成途牛笔试",
     "notes": "",
