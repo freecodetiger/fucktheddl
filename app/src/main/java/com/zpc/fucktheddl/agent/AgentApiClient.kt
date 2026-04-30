@@ -1,5 +1,6 @@
 package com.zpc.fucktheddl.agent
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -26,36 +27,8 @@ class AgentApiClient(
 
     fun editProposal(proposal: AgentProposal): AgentSubmitResult {
         return try {
-            val body = JSONObject()
-                .put("title", proposal.title)
-                .put("summary", proposal.summary)
-            proposal.schedulePatch?.let { patch ->
-                body.put(
-                    "schedule_patch",
-                    JSONObject()
-                        .put("title", patch.title)
-                        .put("start", patch.start)
-                        .put("end", patch.end)
-                        .put("timezone", patch.timezone)
-                        .put("location", patch.location)
-                        .put("notes", patch.notes)
-                        .put("tags", patch.tags),
-                )
-            }
-            proposal.todoPatch?.let { patch ->
-                body.put(
-                    "todo_patch",
-                    JSONObject()
-                        .put("title", patch.title)
-                        .put("due", patch.due)
-                        .put("timezone", patch.timezone)
-                        .put("priority", patch.priority)
-                        .put("notes", patch.notes)
-                        .put("tags", patch.tags),
-                )
-            }
             AgentSubmitResult(
-                proposal = parseProposal(postJson("agent/proposal/${proposal.id}/edit", body)),
+                proposal = parseProposal(postJson("agent/proposal/${proposal.id}/edit", proposal.toEditRequestJson())),
                 error = null,
             )
         } catch (error: Exception) {
@@ -122,6 +95,45 @@ class AgentApiClient(
             AgentApplyResult(status = "failed", commitmentId = "", error = error.message)
         }
     }
+}
+
+internal fun AgentProposal.toEditRequestJson(): JSONObject {
+    val body = JSONObject()
+        .put("title", title)
+        .put("summary", summary)
+    schedulePatch?.let { patch ->
+        body.put(
+            "schedule_patch",
+            JSONObject()
+                .put("title", patch.title)
+                .put("start", patch.start)
+                .put("end", patch.end)
+                .put("timezone", patch.timezone)
+                .put("location", patch.location)
+                .put("notes", patch.notes)
+                .put("tags", JSONArray(patch.tags)),
+        )
+    }
+    todoPatch?.let { patch ->
+        body.put(
+            "todo_patch",
+            JSONObject()
+                .put("title", patch.title)
+                .put("due", patch.due)
+                .put("timezone", patch.timezone)
+                .put("priority", patch.priority)
+                .put("notes", patch.notes)
+                .put("tags", JSONArray(patch.tags)),
+        )
+    }
+    return body
+}
+
+internal fun shouldEditProposalBeforeConfirm(
+    proposal: AgentProposal,
+    edited: Boolean,
+): Boolean {
+    return edited && (proposal.schedulePatch != null || proposal.todoPatch != null)
 }
 
 private fun parseProposal(proposalJson: JSONObject): AgentProposal {

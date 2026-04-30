@@ -68,6 +68,7 @@ import com.zpc.fucktheddl.agent.AgentSchedulePatch
 import com.zpc.fucktheddl.agent.AgentSubmitResult
 import com.zpc.fucktheddl.agent.AgentTodoPatch
 import com.zpc.fucktheddl.agent.mapCommitmentsToScheduleState
+import com.zpc.fucktheddl.agent.shouldEditProposalBeforeConfirm
 import com.zpc.fucktheddl.schedule.OpenSlot
 import com.zpc.fucktheddl.schedule.ScheduleEvent
 import com.zpc.fucktheddl.schedule.ScheduleRisk
@@ -84,20 +85,24 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private val Ink = Color(0xFF171717)
-private val InkSoft = Color(0xFF3F3F46)
-private val Muted = Color(0xFF71717A)
-private val Divider = Color(0xFFE4E4E7)
-private val Canvas = Color(0xFFF7F7F5)
+private val Ink = Color(0xFF14282E)
+private val InkSoft = Color(0xFF355158)
+private val Muted = Color(0xFF75858A)
+private val Divider = Color(0xFFE3E8EA)
+private val Canvas = Color(0xFFFFFFFF)
 private val Panel = Color(0xFFFFFFFF)
-private val Accent = Color(0xFF2563EB)
-private val AccentSoft = Color(0xFFEAF1FF)
-private val Risk = Color(0xFFD97706)
-private val RiskSoft = Color(0xFFFFF4DE)
-private val Danger = Color(0xFFDC2626)
-private val DangerSoft = Color(0xFFFFE8E8)
-private val Success = Color(0xFF059669)
-private val SuccessSoft = Color(0xFFE8F6EF)
+private val Accent = Color(0xFF2F7D8C)
+private val AccentSoft = Color(0xFFEAF3F5)
+private val Risk = Color(0xFFD88A3D)
+private val RiskSoft = Color(0xFFFFF5E9)
+private val Danger = Color(0xFFC94F4F)
+private val DangerSoft = Color(0xFFFFECEB)
+private val Success = Color(0xFF6FA58B)
+private val SuccessSoft = Color(0xFFEFF6F2)
+private val BottomInk = Color(0xFF111111)
+private val BottomMuted = Color(0xFF8A8A8E)
+private val VoiceIdle = Color(0xFF111111)
+private val VoiceDisabled = Color(0xFFE8E8EA)
 
 private val TodayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.CHINA)
 
@@ -365,17 +370,15 @@ private fun TodayTimeline(
     val pendingTodos = todos.filterNot { it.done }
     val todayTodos = pendingTodos.filterForDueDate(today)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Surface(
-            color = Panel,
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, Divider, RoundedCornerShape(18.dp)),
-        ) {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                if (todayEvents.isEmpty()) {
-                    EmptyState(title = "—", detail = "")
-                } else {
+        if (todayEvents.isNotEmpty() || openSlots.isNotEmpty()) {
+            Surface(
+                color = Panel,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Divider, RoundedCornerShape(18.dp)),
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
                     todayEvents.forEachIndexed { index, event ->
                         TimelineEventRow(
                             event = event,
@@ -383,9 +386,9 @@ private fun TodayTimeline(
                             onDelete = { onDeleteCommitment(event.id) },
                         )
                     }
-                }
-                openSlots.take(2).forEach { slot ->
-                    CompactOpenSlotRow(slot = slot)
+                    openSlots.take(2).forEach { slot ->
+                        CompactOpenSlotRow(slot = slot)
+                    }
                 }
             }
         }
@@ -1105,7 +1108,7 @@ private fun BottomWorkspace(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(Color(0xFFE5E5EA)),
+                    .background(Divider),
             )
             VoiceAgentDock(
                 selectedTab = selectedTab,
@@ -1196,7 +1199,7 @@ private fun VoiceAgentDock(
                 cancelArmed = voiceCancelArmed,
                 canCancelVoice = isListening,
                 proposal = proposal,
-                onConfirm = { editedProposal ->
+                onConfirm = { editedProposal, edited ->
                     val current = editedProposal
                     val client = agentApiClient
                     if (client == null) {
@@ -1207,7 +1210,7 @@ private fun VoiceAgentDock(
                     phase = ComposerPhase.Confirming
                     status = "确认中"
                     Thread {
-                        val editResult = if (current.schedulePatch != null || current.todoPatch != null) {
+                        val editResult = if (shouldEditProposalBeforeConfirm(current, edited)) {
                             client.editProposal(current)
                         } else {
                             AgentSubmitResult(proposal = current, error = null)
@@ -1307,12 +1310,12 @@ private fun VoiceAgentDock(
                 voiceCancelArmed = false
                 phase = ComposerPhase.Working
                 status = "正在收尾"
+                client?.stop()
                 mainHandler.postDelayed(
                     {
                         if (releaseRequestId != activeRequestId) {
                             return@postDelayed
                         }
-                        client?.stop()
                         val text = voiceText.trim()
                         if (text.isNotBlank()) {
                             status = "正在整理"
@@ -1322,7 +1325,7 @@ private fun VoiceAgentDock(
                             phase = ComposerPhase.Error
                         }
                     },
-                    480L,
+                    1200L,
                 )
             },
             onCancel = {
@@ -1345,14 +1348,14 @@ private fun VoiceInteractionOverlay(
     cancelArmed: Boolean,
     canCancelVoice: Boolean,
     proposal: AgentProposal?,
-    onConfirm: (AgentProposal) -> Unit,
+    onConfirm: (AgentProposal, Boolean) -> Unit,
     onCancel: () -> Unit,
     onCandidateSelected: (AgentProposalCandidate) -> Unit,
 ) {
     Popup(
         alignment = Alignment.Center,
         properties = PopupProperties(
-            focusable = false,
+            focusable = true,
             dismissOnBackPress = false,
             dismissOnClickOutside = false,
         ),
@@ -1360,7 +1363,7 @@ private fun VoiceInteractionOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.White.copy(alpha = 0.88f))
+                .background(Color.White.copy(alpha = 0.92f))
                 .padding(horizontal = 24.dp, vertical = 64.dp),
         ) {
             if (canCancelVoice) {
@@ -1540,12 +1543,14 @@ private fun CandidateChoiceList(
 @Composable
 private fun ProposalReviewPanel(
     proposal: AgentProposal,
-    onConfirm: (AgentProposal) -> Unit,
+    onConfirm: (AgentProposal, Boolean) -> Unit,
     onClose: () -> Unit,
 ) {
     var editing by remember(proposal.id) { mutableStateOf(false) }
-    var draft by remember(proposal.id) { mutableStateOf(proposal.toEditableDraft()) }
+    val originalDraft = remember(proposal.id) { proposal.toEditableDraft() }
+    var draft by remember(proposal.id) { mutableStateOf(originalDraft) }
     val editedProposal = draft.toProposal(proposal)
+    val edited = draft != originalDraft
     Surface(
         color = Color.White.copy(alpha = 0.92f),
         shape = RoundedCornerShape(28.dp),
@@ -1572,7 +1577,7 @@ private fun ProposalReviewPanel(
                 ProposalReadOnlySummary(proposal = editedProposal)
             }
             Button(
-                onClick = { onConfirm(editedProposal) },
+                onClick = { onConfirm(if (edited) editedProposal else proposal, edited) },
                 colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
@@ -1822,24 +1827,75 @@ private fun MiniWaveform(color: Color) {
 
 @Composable
 private fun MicGlyph(color: Color) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width = 13.dp, height = 20.dp)
-                .border(2.dp, color, RoundedCornerShape(999.dp)),
+    Canvas(modifier = Modifier.size(width = 34.dp, height = 30.dp)) {
+        val strokeWidth = 2.2.dp.toPx()
+        val stroke = Stroke(
+            width = strokeWidth,
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round,
         )
-        Box(
-            modifier = Modifier
-                .size(width = 22.dp, height = 10.dp)
-                .border(2.dp, color, RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)),
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(13.dp.toPx(), 4.dp.toPx()),
+            size = Size(8.dp.toPx(), 16.dp.toPx()),
+            cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx()),
+            style = stroke,
         )
-        Box(
-            modifier = Modifier
-                .size(width = 2.dp, height = 6.dp)
-                .background(color, RoundedCornerShape(999.dp)),
+        drawLine(
+            color = color,
+            start = Offset(8.dp.toPx(), 14.dp.toPx()),
+            end = Offset(8.dp.toPx(), 16.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(8.dp.toPx(), 16.dp.toPx()),
+            end = Offset(11.dp.toPx(), 22.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(11.dp.toPx(), 22.dp.toPx()),
+            end = Offset(17.dp.toPx(), 24.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(17.dp.toPx(), 24.dp.toPx()),
+            end = Offset(23.dp.toPx(), 22.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(23.dp.toPx(), 22.dp.toPx()),
+            end = Offset(26.dp.toPx(), 16.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(26.dp.toPx(), 16.dp.toPx()),
+            end = Offset(26.dp.toPx(), 14.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(17.dp.toPx(), 24.dp.toPx()),
+            end = Offset(17.dp.toPx(), 27.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+        drawLine(
+            color = color,
+            start = Offset(13.dp.toPx(), 27.dp.toPx()),
+            end = Offset(21.dp.toPx(), 27.dp.toPx()),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
         )
     }
 }
@@ -1861,7 +1917,7 @@ private fun BottomVoiceNav(
         modifier = Modifier
             .fillMaxWidth()
             .height(98.dp)
-            .background(Color(0xFFFBFBFD))
+            .background(Color.White)
             .padding(horizontal = 18.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -1901,7 +1957,7 @@ private fun BottomTabButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val color = if (selected) Accent else Color(0xFF7C7C82)
+    val color = if (selected) BottomInk else BottomMuted
     Column(
         modifier = modifier
             .height(72.dp)
@@ -2009,11 +2065,11 @@ private fun VoiceCancelZone(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        color = if (armed) DangerSoft else Color(0xFFF2F2F7),
+        color = if (armed) DangerSoft else Color(0xFFF7F7F8),
         shape = RoundedCornerShape(999.dp),
         modifier = modifier.border(
             width = 1.dp,
-            color = if (armed) Danger else Color(0xFFD1D1D6),
+            color = if (armed) Danger else Divider,
             shape = RoundedCornerShape(999.dp),
         ),
     ) {
@@ -2050,10 +2106,10 @@ private fun VoicePrimaryButton(
     ) {
         Surface(
             color = when {
-                !enabled -> Color(0xFFE5E5EA)
+                !enabled -> VoiceDisabled
                 cancelArmed -> Danger
-                listening -> Accent
-                else -> Color(0xFFEAF1FF)
+                listening -> VoiceIdle
+                else -> VoiceIdle
             },
             shape = RoundedCornerShape(999.dp),
             shadowElevation = if (listening) 8.dp else 0.dp,
@@ -2098,7 +2154,7 @@ private fun VoicePrimaryButton(
                 if (listening) {
                     MiniWaveform(color = Color.White)
                 } else {
-                    MicGlyph(color = if (enabled) Accent else Muted)
+                    MicGlyph(color = if (enabled) Color.White else BottomMuted)
                 }
             }
         }
