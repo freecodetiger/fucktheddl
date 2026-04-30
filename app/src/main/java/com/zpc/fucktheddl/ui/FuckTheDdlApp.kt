@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import com.zpc.fucktheddl.BuildConfig
 import com.zpc.fucktheddl.agent.AgentApiClient
 import com.zpc.fucktheddl.agent.AgentApplyResult
 import com.zpc.fucktheddl.agent.AgentCommitmentsPayload
@@ -177,7 +178,7 @@ fun FuckTheDdlApp(
     var shellState by remember { mutableStateOf(initialState) }
     val todayTab = remember(shellState.tabs) {
         shellState.tabs.firstOrNull { it.destination == TabDestination.Today }
-            ?: ScheduleTab(label = "今天", destination = TabDestination.Today)
+            ?: ScheduleTab(label = "日程", destination = TabDestination.Today)
     }
     val todoTab = remember(shellState.tabs) {
         shellState.tabs.firstOrNull { it.destination == TabDestination.Todo }
@@ -263,7 +264,6 @@ fun FuckTheDdlApp(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 18.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
@@ -281,23 +281,31 @@ fun FuckTheDdlApp(
                     events = shellState.events,
                     todos = shellState.todos,
                     onDeleteCommitment = ::deleteCommitment,
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
                 )
 
                 selectedTab.destination == TabDestination.Today -> TodayTimeline(
                     events = shellState.events,
                     todos = shellState.todos,
                     onDeleteCommitment = ::deleteCommitment,
+                    modifier = Modifier.weight(1f),
                 )
 
                 selectedTab.destination == TabDestination.Todo -> TodoSurface(
                     todos = shellState.todos,
                     onDeleteCommitment = ::deleteCommitment,
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
                 )
 
                 else -> TodayTimeline(
                     events = shellState.events,
                     todos = shellState.todos,
                     onDeleteCommitment = ::deleteCommitment,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -412,6 +420,7 @@ private fun ConnectionSettingsOverlay(
     var testHealthy by remember { mutableStateOf<Boolean?>(null) }
     var testLabel by remember { mutableStateOf("") }
     var testDetail by remember { mutableStateOf("") }
+    var selectedTheme by remember { mutableStateOf("经典浅色") }
     val testHandler = remember { Handler(Looper.getMainLooper()) }
     val normalizedBaseUrl = baseUrl.trim()
     val urlValid = normalizedBaseUrl.startsWith("http://") || normalizedBaseUrl.startsWith("https://")
@@ -451,11 +460,12 @@ private fun ConnectionSettingsOverlay(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     Text(
-                        text = "连接",
+                        text = "设置",
                         color = Ink,
                         fontSize = 28.sp,
                         fontWeight = FontWeight.SemiBold,
                     )
+                    SettingsGroupTitle("连接")
                     Text(
                         text = "后端负责 AI 转发和语音授权。测试只检查后端是否可达，不会提交 DeepSeek Key。",
                         color = Muted,
@@ -593,6 +603,34 @@ private fun ConnectionSettingsOverlay(
                             }
                         }
                     }
+                    SettingsGroupTitle("外观")
+                    ThemeOptionRow(
+                        name = "经典浅色",
+                        description = "当前主题",
+                        color = Accent,
+                        selected = selectedTheme == "经典浅色",
+                        onClick = { selectedTheme = "经典浅色" },
+                    )
+                    ThemeOptionRow(
+                        name = "深色",
+                        description = "低亮度环境",
+                        color = BottomInk,
+                        selected = selectedTheme == "深色",
+                        onClick = { selectedTheme = "深色" },
+                    )
+                    ThemeOptionRow(
+                        name = "雾蓝",
+                        description = "更冷静的浅色",
+                        color = Color(0xFF5F7E9B),
+                        selected = selectedTheme == "雾蓝",
+                        onClick = { selectedTheme = "雾蓝" },
+                    )
+                    SettingsGroupTitle("关于")
+                    SettingsInfoRow(
+                        label = "版本",
+                        value = BuildConfig.VERSION_NAME,
+                        leadingColor = Ink,
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -636,30 +674,138 @@ private fun ConnectionSettingsOverlay(
 }
 
 @Composable
+private fun SettingsGroupTitle(text: String) {
+    Text(
+        text = text,
+        color = Ink,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+@Composable
+private fun ThemeOptionRow(
+    name: String,
+    description: String,
+    color: Color,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = if (selected) AccentSoft else Color.Transparent,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = if (selected) Color(0xFFD0E4E8) else Divider,
+                shape = RoundedCornerShape(16.dp),
+            )
+            .pointerInput(name) {
+                detectTapGestures(onTap = { onClick() })
+            },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(18.dp)
+                    .background(color, RoundedCornerShape(999.dp)),
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(text = name, color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = description, color = Muted, fontSize = 12.sp)
+            }
+            Text(
+                text = if (selected) "已选" else "",
+                color = Accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsInfoRow(
+    label: String,
+    value: String,
+    leadingColor: Color,
+) {
+    Surface(
+        color = AccentSoft.copy(alpha = 0.42f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Color(0xFFD9E8EB), RoundedCornerShape(16.dp)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(leadingColor, RoundedCornerShape(999.dp)),
+            )
+            Text(
+                text = label,
+                color = Ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = value,
+                color = Muted,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
 private fun TodayTimeline(
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val today = LocalDate.now()
-    val todayEvents = events.filterForDate(today)
+    val todayEvents = events
+        .filterForDate(today)
+        .sortedBy { event -> event.timeRange }
     val upcomingEvents = events
         .filterAfter(today)
         .sortedWith(compareBy<ScheduleEvent> { it.date.ifBlank { today.toString() } }.thenBy { it.timeRange })
-        .take(3)
     val pendingTodos = todos.filterNot { it.done }
     val homeTodos = pendingTodos
         .sortedByDueDate()
-        .take(7)
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
         HomeScheduleSection(
             todayEvents = todayEvents,
             upcomingEvents = upcomingEvents,
             onDeleteCommitment = onDeleteCommitment,
+            modifier = Modifier.weight(1f),
         )
         HomeTodoTimelineSection(
             todos = homeTodos,
             onDeleteCommitment = onDeleteCommitment,
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -669,8 +815,12 @@ private fun HomeScheduleSection(
     todayEvents: List<ScheduleEvent>,
     upcomingEvents: List<ScheduleEvent>,
     onDeleteCommitment: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         HomeSectionLabel(
             title = "日程",
             caption = if (todayEvents.isEmpty()) "今天" else "今天 ${todayEvents.size}",
@@ -680,9 +830,14 @@ private fun HomeScheduleSection(
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f)
                 .border(1.dp, Divider, RoundedCornerShape(18.dp)),
         ) {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 4.dp),
+            ) {
                 if (todayEvents.isEmpty()) {
                     QuietTimelineEmpty(text = "今天没有日程")
                 } else {
@@ -718,8 +873,12 @@ private fun HomeScheduleSection(
 private fun HomeTodoTimelineSection(
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         HomeSectionLabel(
             title = "待办",
             caption = if (todos.isEmpty()) "" else "${todos.size}",
@@ -729,9 +888,14 @@ private fun HomeTodoTimelineSection(
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f)
                 .border(1.dp, Color(0xFFD9E8EB), RoundedCornerShape(18.dp)),
         ) {
-            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 4.dp),
+            ) {
                 if (todos.isEmpty()) {
                     QuietTimelineEmpty(text = "没有待办")
                 } else {
@@ -808,6 +972,7 @@ private fun TimelineEventRow(
     showConnector: Boolean,
     onDelete: () -> Unit,
 ) {
+    var confirmingDelete by remember(event.id) { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -856,7 +1021,15 @@ private fun TimelineEventRow(
                 modifier = Modifier.weight(1f),
             )
             if (event.id.isNotBlank()) {
-                MiniDeleteButton(onClick = onDelete)
+                ConfirmableMiniDeleteButton(
+                    confirming = confirmingDelete,
+                    onRequestConfirm = { confirmingDelete = true },
+                    onConfirm = {
+                        confirmingDelete = false
+                        onDelete()
+                    },
+                    onCancel = { confirmingDelete = false },
+                )
             }
         }
     }
@@ -938,6 +1111,7 @@ private fun UpcomingEventRow(
     event: ScheduleEvent,
     onDelete: () -> Unit,
 ) {
+    var confirmingDelete by remember(event.id) { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -968,7 +1142,15 @@ private fun UpcomingEventRow(
             modifier = Modifier.weight(1f),
         )
         if (event.id.isNotBlank()) {
-            MiniDeleteButton(onClick = onDelete)
+            ConfirmableMiniDeleteButton(
+                confirming = confirmingDelete,
+                onRequestConfirm = { confirmingDelete = true },
+                onConfirm = {
+                    confirmingDelete = false
+                    onDelete()
+                },
+                onCancel = { confirmingDelete = false },
+            )
         }
     }
 }
@@ -978,10 +1160,14 @@ private fun CalendarSurface(
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
     var visibleMonth by remember { mutableStateOf(YearMonth.now()) }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         MonthSwitcher(
             month = visibleMonth,
             onPrevious = {
@@ -1195,6 +1381,7 @@ private fun CalendarDayCell(
 private fun TodoSurface(
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
     val normalizedQuery = query.trim()
@@ -1206,7 +1393,10 @@ private fun TodoSurface(
         .filter { it.done }
         .filter { it.matchesTodoQuery(normalizedQuery) }
         .sortedByDueDate()
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         TodoSearchField(
             query = query,
             onQueryChange = { query = it },
@@ -1442,6 +1632,51 @@ private fun MiniDeleteButton(onClick: () -> Unit) {
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
         )
+    }
+}
+
+@Composable
+private fun ConfirmableMiniDeleteButton(
+    confirming: Boolean,
+    onRequestConfirm: () -> Unit,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    if (!confirming) {
+        MiniDeleteButton(onClick = onRequestConfirm)
+        return
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Surface(
+            color = Danger,
+            shape = RoundedCornerShape(999.dp),
+            modifier = Modifier.pointerInput(Unit) {
+                detectTapGestures(onTap = { onConfirm() })
+            },
+        ) {
+            Text(
+                text = "删除",
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            )
+        }
+        Surface(
+            color = AccentSoft,
+            shape = RoundedCornerShape(999.dp),
+            modifier = Modifier.pointerInput(Unit) {
+                detectTapGestures(onTap = { onCancel() })
+            },
+        ) {
+            Text(
+                text = "取消",
+                color = Accent,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            )
+        }
     }
 }
 
@@ -2364,7 +2599,7 @@ private fun BottomVoiceNav(
     ) {
         BottomTabButton(
             icon = BottomNavIcon.Today,
-            label = "今天",
+            label = "日程",
             selected = selectedTab.destination == TabDestination.Today,
             onClick = onTodaySelected,
             modifier = Modifier.weight(1f),

@@ -11,7 +11,7 @@ class StarterScheduleRepositoryTest {
     fun initialStateHasUsefulTodaySurfaceData() {
         val state = repository.loadInitialState()
 
-        assertEquals("今天", state.selectedTab.label)
+        assertEquals("日程", state.selectedTab.label)
         assertTrue(state.events.isNotEmpty())
         assertTrue(state.todos.isNotEmpty())
         assertTrue(state.openSlots.isEmpty())
@@ -23,7 +23,7 @@ class StarterScheduleRepositoryTest {
     fun navigationExposesVoiceFirstCoreDestinations() {
         val labels = repository.loadInitialState().tabs.map { it.label }
 
-        assertEquals(listOf("今天", "待办"), labels)
+        assertEquals(listOf("日程", "待办"), labels)
     }
 
     @Test

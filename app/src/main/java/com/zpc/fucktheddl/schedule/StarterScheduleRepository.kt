@@ -3,7 +3,7 @@ package com.zpc.fucktheddl.schedule
 class StarterScheduleRepository {
     fun loadInitialState(): ScheduleShellState {
         val tabs = listOf(
-            ScheduleTab(label = "今天", destination = TabDestination.Today),
+            ScheduleTab(label = "日程", destination = TabDestination.Today),
             ScheduleTab(label = "待办", destination = TabDestination.Todo),
         )
 
