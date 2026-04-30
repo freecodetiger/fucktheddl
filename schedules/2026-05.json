@@ -13,5 +13,20 @@
     "timezone": "Asia/Shanghai",
     "title": "午睡",
     "updated_at": "2026-04-29T00:00:00+08:00"
+  },
+  {
+    "created_at": "2026-04-29T00:00:00+08:00",
+    "end": "2026-05-01T10:00:00+08:00",
+    "id": "evt_20260501_090000_上地理课",
+    "location": "",
+    "notes": "",
+    "reminders": [],
+    "source_text": "上地理课",
+    "start": "2026-05-01T09:00:00+08:00",
+    "status": "confirmed",
+    "tags": [],
+    "timezone": "Asia/Shanghai",
+    "title": "上地理课",
+    "updated_at": "2026-04-29T00:00:00+08:00"
   }
 ]
