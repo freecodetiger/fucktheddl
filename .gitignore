@@ -17,5 +17,4 @@ app/build/
 RELEASE_KEYSTORE.txt
 ChatGPT Image*.png
 out.png
-docs/assets/
 .claude/
