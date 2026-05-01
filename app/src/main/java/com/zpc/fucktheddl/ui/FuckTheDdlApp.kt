@@ -39,7 +39,16 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDialog
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -84,6 +93,8 @@ import com.zpc.fucktheddl.agent.AgentProposalCandidate
 import com.zpc.fucktheddl.agent.AgentSchedulePatch
 import com.zpc.fucktheddl.agent.AgentTodoPatch
 import com.zpc.fucktheddl.agent.ProposalPresentation
+import com.zpc.fucktheddl.agent.createScheduleProposal
+import com.zpc.fucktheddl.agent.createTodoProposal
 import com.zpc.fucktheddl.agent.mapCommitmentsToScheduleState
 import com.zpc.fucktheddl.agent.presentation
 import com.zpc.fucktheddl.agent.toScheduleUpdateProposal
@@ -293,6 +304,11 @@ private enum class SettingsPanel {
     Theme,
 }
 
+private enum class CreateCommitmentKind {
+    Schedule,
+    Todo,
+}
+
 private enum class ConnectionIndicator {
     Checking,
     Connected,
@@ -409,6 +425,9 @@ fun FuckTheDdlApp(
     var showingSettings by remember { mutableStateOf(false) }
     var activeEditMenu by remember { mutableStateOf<CommitmentEditMenuRequest?>(null) }
     var activeEditTarget by remember { mutableStateOf<CommitmentEditTarget?>(null) }
+    var createMenuVisible by remember { mutableStateOf(false) }
+    var activeCreateKind by remember { mutableStateOf<CreateCommitmentKind?>(null) }
+    var voiceRecording by remember { mutableStateOf(false) }
     var backendConnectionState by remember { mutableStateOf(BackendConnectionState()) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
@@ -515,6 +534,7 @@ fun FuckTheDdlApp(
                     commitmentsProvider = commitmentsProvider,
                     proposalApplier = proposalApplier,
                     onCommitmentsChanged = ::refreshCommitments,
+                    onVoiceRecordingChanged = { voiceRecording = it },
                 )
             },
         ) { innerPadding ->
@@ -596,6 +616,34 @@ fun FuckTheDdlApp(
                         onDismiss = { activeEditTarget = null },
                         onSave = { proposal ->
                             activeEditTarget = null
+                            updateCommitment(proposal)
+                        },
+                    )
+                }
+                if (!voiceRecording && !showingSettings && activeEditMenu == null && activeEditTarget == null && activeCreateKind == null) {
+                    GlobalCreateFab(
+                        menuVisible = createMenuVisible,
+                        onToggle = { createMenuVisible = !createMenuVisible },
+                        onDismissMenu = { createMenuVisible = false },
+                        onCreateSchedule = {
+                            createMenuVisible = false
+                            activeCreateKind = CreateCommitmentKind.Schedule
+                        },
+                        onCreateTodo = {
+                            createMenuVisible = false
+                            activeCreateKind = CreateCommitmentKind.Todo
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 18.dp, bottom = 132.dp),
+                    )
+                }
+                activeCreateKind?.let { kind ->
+                    CreateCommitmentOverlay(
+                        kind = kind,
+                        onDismiss = { activeCreateKind = null },
+                        onSave = { proposal ->
+                            activeCreateKind = null
                             updateCommitment(proposal)
                         },
                     )
@@ -1662,9 +1710,9 @@ private fun InlineScheduleEditor(
     ) {
         CompactEditField(value = title, onValueChange = onTitleChange, label = "标题")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CompactEditField(value = date, onValueChange = onDateChange, label = "日期", modifier = Modifier.weight(1.25f))
-            CompactEditField(value = startTime, onValueChange = onStartTimeChange, label = "开始", modifier = Modifier.weight(1f))
-            CompactEditField(value = endTime, onValueChange = onEndTimeChange, label = "结束", modifier = Modifier.weight(1f))
+            DatePickerField(value = date, onDateChange = onDateChange, label = "日期", modifier = Modifier.weight(1.25f))
+            TimePickerField(value = startTime, onTimeChange = onStartTimeChange, label = "开始", modifier = Modifier.weight(1f))
+            TimePickerField(value = endTime, onTimeChange = onEndTimeChange, label = "结束", modifier = Modifier.weight(1f))
         }
         CompactEditField(value = notes, onValueChange = onNotesChange, label = "备注", singleLine = false)
         InlineEditActions(onSave = onSave, onCancel = onCancel)
@@ -1677,10 +1725,12 @@ private fun InlineTodoEditor(
     due: String,
     notes: String,
     priority: String,
+    hasDeadline: Boolean,
     onTitleChange: (String) -> Unit,
     onDueChange: (String) -> Unit,
     onNotesChange: (String) -> Unit,
     onPriorityChange: (String) -> Unit,
+    onHasDeadlineChange: (Boolean) -> Unit,
     onSave: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -1689,7 +1739,12 @@ private fun InlineTodoEditor(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         CompactEditField(value = title, onValueChange = onTitleChange, label = "标题")
-        CompactEditField(value = due, onValueChange = onDueChange, label = "截止")
+        DeadlinePicker(
+            hasDeadline = hasDeadline,
+            onHasDeadlineChange = onHasDeadlineChange,
+            date = due,
+            onDateChange = onDueChange,
+        )
         PriorityPicker(priority = priority, onPriorityChange = onPriorityChange)
         CompactEditField(value = notes, onValueChange = onNotesChange, label = "备注", singleLine = false)
         InlineEditActions(onSave = onSave, onCancel = onCancel)
@@ -1763,6 +1818,166 @@ private fun InlineEditActions(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatePickerField(
+    value: String,
+    onDateChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val displayText = remember(value) {
+        if (value.isBlank()) null
+        else try {
+            val date = LocalDate.parse(value)
+            val pattern = DateTimeFormatter.ofPattern("M月d日 (E)", Locale.CHINESE)
+            date.format(pattern)
+        } catch (_: Exception) { value }
+    }
+    var showDialog by remember { mutableStateOf(false) }
+
+    Box(modifier = modifier) {
+        OutlinedTextField(
+            value = displayText ?: "",
+            onValueChange = {},
+            label = { Text(label, fontSize = 12.sp) },
+            placeholder = { Text("选择日期", fontSize = 14.sp, color = Muted) },
+            readOnly = true,
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            colors = appTextFieldColors(),
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = { Text("▾", fontSize = 12.sp, color = Muted) },
+        )
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .pointerInput(Unit) { detectTapGestures(onTap = { showDialog = true }) },
+        )
+    }
+
+    if (showDialog) {
+        val initialDate = remember(value) {
+            try { LocalDate.parse(value) } catch (_: Exception) { LocalDate.now() }
+        }
+        val initialMillis = initialDate.atStartOfDay(java.time.ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli()
+        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+
+        DatePickerDialog(
+            onDismissRequest = { showDialog = false },
+            confirmButton = {
+                TextAction(text = "确定", onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val selectedDate = java.time.Instant.ofEpochMilli(millis)
+                            .atZone(java.time.ZoneId.of("Asia/Shanghai"))
+                            .toLocalDate()
+                        onDateChange(selectedDate.toString())
+                    }
+                    showDialog = false
+                })
+            },
+            dismissButton = { TextAction(text = "取消", onClick = { showDialog = false }) },
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimePickerField(
+    value: String,
+    onTimeChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    val (hour, minute) = remember(value) {
+        val parts = value.split(":")
+        val h = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 9
+        val m = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0
+        h to m
+    }
+
+    Box(modifier = modifier) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            label = { Text(label, fontSize = 12.sp) },
+            readOnly = true,
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            colors = appTextFieldColors(),
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = { Text("▾", fontSize = 12.sp, color = Muted) },
+        )
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .pointerInput(Unit) { detectTapGestures(onTap = { showDialog = true }) },
+        )
+    }
+
+    if (showDialog) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = hour,
+            initialMinute = minute,
+            is24Hour = true,
+        )
+
+        TimePickerDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("选择时间", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink) },
+            confirmButton = {
+                TextAction(text = "确定", onClick = {
+                    onTimeChange("%02d:%02d".format(timePickerState.hour, timePickerState.minute))
+                    showDialog = false
+                })
+            },
+            dismissButton = { TextAction(text = "取消", onClick = { showDialog = false }) },
+        ) {
+            TimePicker(state = timePickerState)
+        }
+    }
+}
+
+@Composable
+private fun DeadlinePicker(
+    hasDeadline: Boolean,
+    onHasDeadlineChange: (Boolean) -> Unit,
+    date: String,
+    onDateChange: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "截止日期",
+                color = if (hasDeadline) Ink else Muted,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Switch(
+                checked = hasDeadline,
+                onCheckedChange = onHasDeadlineChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Accent,
+                    uncheckedThumbColor = Color.White,
+                    uncheckedTrackColor = Divider,
+                ),
+            )
+        }
+        if (hasDeadline) {
+            DatePickerField(value = date, onDateChange = onDateChange, label = "")
         }
     }
 }
@@ -1880,6 +2095,211 @@ private fun CommitmentEditOverlay(
 }
 
 @Composable
+private fun GlobalCreateFab(
+    menuVisible: Boolean,
+    onToggle: () -> Unit,
+    onDismissMenu: () -> Unit,
+    onCreateSchedule: () -> Unit,
+    onCreateTodo: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.BottomEnd) {
+        if (menuVisible) {
+            Popup(
+                alignment = Alignment.BottomEnd,
+                offset = IntOffset(x = -18, y = -204),
+                onDismissRequest = onDismissMenu,
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnClickOutside = true,
+                ),
+            ) {
+                CreateQuickMenu(
+                    onCreateSchedule = onCreateSchedule,
+                    onCreateTodo = onCreateTodo,
+                )
+            }
+        }
+        Surface(
+            color = Ink,
+            shape = RoundedCornerShape(999.dp),
+            shadowElevation = 12.dp,
+            modifier = Modifier
+                .size(54.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { onToggle() })
+                },
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Text(
+                    text = "+",
+                    color = readableOn(Ink),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Medium,
+                    lineHeight = 28.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreateQuickMenu(
+    onCreateSchedule: () -> Unit,
+    onCreateTodo: () -> Unit,
+) {
+    Surface(
+        color = Panel.copy(alpha = 0.96f),
+        shape = RoundedCornerShape(22.dp),
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .width(156.dp)
+            .border(1.dp, Divider.copy(alpha = 0.8f), RoundedCornerShape(22.dp)),
+    ) {
+        Column(modifier = Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            CreateMenuRow(text = "日程", onClick = onCreateSchedule)
+            CreateMenuRow(text = "待办", onClick = onCreateTodo)
+        }
+    }
+}
+
+@Composable
+private fun CreateMenuRow(
+    text: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = Color.Transparent,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(text) {
+                detectTapGestures(onTap = { onClick() })
+            },
+    ) {
+        Text(
+            text = text,
+            color = Ink,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+        )
+    }
+}
+
+@Composable
+private fun CreateCommitmentOverlay(
+    kind: CreateCommitmentKind,
+    onDismiss: () -> Unit,
+    onSave: (AgentProposal) -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.34f))
+            .pointerInput(kind) {
+                detectTapGestures(onTap = { onDismiss() })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = Panel.copy(alpha = 0.96f),
+            shape = RoundedCornerShape(30.dp),
+            shadowElevation = 28.dp,
+            modifier = Modifier
+                .padding(horizontal = 18.dp)
+                .fillMaxWidth()
+                .border(1.dp, Divider.copy(alpha = 0.78f), RoundedCornerShape(30.dp))
+                .pointerInput(kind) {
+                    detectTapGestures(onTap = { })
+                },
+        ) {
+            when (kind) {
+                CreateCommitmentKind.Schedule -> ScheduleCreateCard(
+                    onDismiss = onDismiss,
+                    onSave = onSave,
+                )
+                CreateCommitmentKind.Todo -> TodoCreateCard(
+                    onDismiss = onDismiss,
+                    onSave = onSave,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleCreateCard(
+    onDismiss: () -> Unit,
+    onSave: (AgentProposal) -> Unit,
+) {
+    var title by remember { mutableStateOf("") }
+    var date by remember { mutableStateOf(LocalDate.now().toString()) }
+    var startTime by remember { mutableStateOf("09:00") }
+    var endTime by remember { mutableStateOf("10:00") }
+    var notes by remember { mutableStateOf("") }
+    Column(
+        modifier = Modifier.padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        EditCardHeader(title = "新建日程", subtitle = "时间会进入日程线")
+        InlineScheduleEditor(
+            title = title,
+            date = date,
+            startTime = startTime,
+            endTime = endTime,
+            notes = notes,
+            onTitleChange = { title = it },
+            onDateChange = { date = it },
+            onStartTimeChange = { startTime = it },
+            onEndTimeChange = { endTime = it },
+            onNotesChange = { notes = it },
+            onSave = { onSave(createScheduleProposal(title, date, startTime, endTime, notes)) },
+            onCancel = onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun TodoCreateCard(
+    onDismiss: () -> Unit,
+    onSave: (AgentProposal) -> Unit,
+) {
+    var title by remember { mutableStateOf("") }
+    var due by remember { mutableStateOf("") }
+    var hasDeadline by remember { mutableStateOf(false) }
+    var notes by remember { mutableStateOf("") }
+    var priority by remember { mutableStateOf("medium") }
+    Column(
+        modifier = Modifier.padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        EditCardHeader(title = "新建待办", subtitle = "截止可留空")
+        InlineTodoEditor(
+            title = title,
+            due = due,
+            notes = notes,
+            priority = priority,
+            hasDeadline = hasDeadline,
+            onTitleChange = { title = it },
+            onDueChange = { due = it },
+            onNotesChange = { notes = it },
+            onPriorityChange = { priority = it },
+            onHasDeadlineChange = { enabled ->
+                hasDeadline = enabled
+                if (enabled && due.isBlank()) {
+                    due = LocalDate.now().toString()
+                } else if (!enabled) {
+                    due = ""
+                }
+            },
+            onSave = { onSave(createTodoProposal(title, due, notes, priority)) },
+            onCancel = onDismiss,
+        )
+    }
+}
+
+@Composable
 private fun ScheduleEditCard(
     event: ScheduleEvent,
     onDismiss: () -> Unit,
@@ -1923,6 +2343,7 @@ private fun TodoEditCard(
 ) {
     var title by remember(todo.stableUiKey(), todo.title) { mutableStateOf(todo.title) }
     var due by remember(todo.stableUiKey(), todo.dueDate) { mutableStateOf(todo.dueDate) }
+    var hasDeadline by remember(todo.stableUiKey(), todo.dueDate) { mutableStateOf(todo.dueDate.isNotBlank()) }
     var notes by remember(todo.stableUiKey(), todo.detail) { mutableStateOf(todo.detail) }
     var priority by remember(todo.stableUiKey(), todo.priority) { mutableStateOf(todo.priority.backendValue()) }
     Column(
@@ -1935,10 +2356,19 @@ private fun TodoEditCard(
             due = due,
             notes = notes,
             priority = priority,
+            hasDeadline = hasDeadline,
             onTitleChange = { title = it },
             onDueChange = { due = it },
             onNotesChange = { notes = it },
             onPriorityChange = { priority = it },
+            onHasDeadlineChange = { enabled ->
+                hasDeadline = enabled
+                if (enabled && due.isBlank()) {
+                    due = LocalDate.now().toString()
+                } else if (!enabled) {
+                    due = ""
+                }
+            },
             onSave = { onSave(todo.toTodoUpdateProposal(title, due, notes, priority)) },
             onCancel = onDismiss,
         )
@@ -2702,6 +3132,7 @@ private fun BottomWorkspace(
     commitmentsProvider: () -> AgentCommitmentsPayload,
     proposalApplier: (AgentProposal) -> AgentApplyResult,
     onCommitmentsChanged: () -> Unit,
+    onVoiceRecordingChanged: (Boolean) -> Unit,
 ) {
     Surface(
         color = Panel,
@@ -2728,6 +3159,7 @@ private fun BottomWorkspace(
                 commitmentsProvider = commitmentsProvider,
                 proposalApplier = proposalApplier,
                 onCommitmentsChanged = onCommitmentsChanged,
+                onVoiceRecordingChanged = onVoiceRecordingChanged,
                 modifier = Modifier
                     .fillMaxWidth()
             )
@@ -2746,6 +3178,7 @@ private fun VoiceAgentDock(
     commitmentsProvider: () -> AgentCommitmentsPayload,
     proposalApplier: (AgentProposal) -> AgentApplyResult,
     onCommitmentsChanged: () -> Unit,
+    onVoiceRecordingChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var status by remember { mutableStateOf(if (agentApiClient == null) "后端未连接" else "准备说话") }
@@ -2759,6 +3192,9 @@ private fun VoiceAgentDock(
     val hasModelApiKey = connectionSettings.deepseekApiKey.isNotBlank()
     val isSignedIn = connectionSettings.accessToken.isNotBlank() && connectionSettings.userEmail.isNotBlank()
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    LaunchedEffect(isListening) {
+        onVoiceRecordingChanged(isListening)
+    }
 
     fun submit(value: String) {
         val prompt = value.trim()

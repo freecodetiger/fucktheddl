@@ -6,6 +6,65 @@ import com.zpc.fucktheddl.schedule.TodoPriority
 import java.time.LocalDate
 import java.util.Locale
 
+fun createScheduleProposal(
+    title: String,
+    date: String,
+    startTime: String,
+    endTime: String,
+    notes: String,
+): AgentProposal {
+    val normalizedTitle = title.trim().ifBlank { "新日程" }
+    val normalizedDate = date.trim().ifBlank { LocalDate.now().toString() }
+    val normalizedStart = startTime.normalizedClock("09:00")
+    val normalizedEnd = endTime.normalizedClock("10:00")
+    val patch = AgentSchedulePatch(
+        title = normalizedTitle,
+        start = "${normalizedDate}T${normalizedStart}:00+08:00",
+        end = "${normalizedDate}T${normalizedEnd}:00+08:00",
+        timezone = "Asia/Shanghai",
+        location = "",
+        notes = notes.trim(),
+        tags = emptyList(),
+    )
+    return AgentProposal(
+        id = "local_create_schedule_${normalizedDate}_${normalizedStart}_${normalizedTitle.hashCode()}",
+        commitmentType = CommitmentType.Schedule,
+        title = normalizedTitle,
+        summary = "$normalizedTitle $normalizedDate $normalizedStart-$normalizedEnd",
+        impact = "创建日程",
+        requiresConfirmation = true,
+        schedulePatch = patch,
+    )
+}
+
+fun createTodoProposal(
+    title: String,
+    due: String,
+    notes: String,
+    priority: String,
+): AgentProposal {
+    val normalizedTitle = title.trim().ifBlank { "新待办" }
+    val normalizedDue = due.trim()
+    val normalizedPriority = priority.normalizedPriority(fallback = "medium")
+    val patch = AgentTodoPatch(
+        title = normalizedTitle,
+        due = normalizedDue,
+        timezone = "Asia/Shanghai",
+        priority = normalizedPriority,
+        notes = notes.trim(),
+        tags = emptyList(),
+    )
+    return AgentProposal(
+        id = "local_create_todo_${normalizedDue}_${normalizedTitle.hashCode()}",
+        commitmentType = CommitmentType.Todo,
+        title = normalizedTitle,
+        summary = if (normalizedDue.isBlank()) normalizedTitle else "$normalizedTitle $normalizedDue",
+        impact = "创建待办",
+        requiresConfirmation = true,
+        todoPatch = patch,
+    )
+}
+
 fun ScheduleEvent.toScheduleUpdateProposal(
     title: String,
     date: String,
