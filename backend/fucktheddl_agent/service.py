@@ -15,6 +15,16 @@ class AgentService:
         self._model_gateway = model_gateway
 
     def propose(self, request: AgentRequest, user_id: str = "anonymous") -> AgentResponse:
+        server_disabled = (
+            self._model_gateway is None
+            or not self._model_gateway.settings.enabled
+        )
+        if server_disabled and not request.model_api_key:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="请在设置中填入你的 DeepSeek API Key",
+            )
         model_extraction = self._model_gateway.extract_commitment(
             request.text,
             settings=_request_model_settings(request),
