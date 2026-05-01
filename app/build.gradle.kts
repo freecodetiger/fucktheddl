@@ -27,7 +27,7 @@ android {
     val ksKeyPassword = localProperties.getProperty("release.keyPassword")
         ?: System.getenv("RELEASE_KEY_PASSWORD") ?: "android"
 
-    val hasReleaseKeystore = ksPath != null
+    val hasReleaseKeystore = ksPath != null && file(ksPath).exists()
 
     defaultConfig {
         applicationId = "com.zpc.fucktheddl"
