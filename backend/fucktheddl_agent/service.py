@@ -1,6 +1,8 @@
 from datetime import date
 from pathlib import Path
 
+from fastapi import HTTPException, status
+
 from fucktheddl_agent.config import ModelSettings
 from fucktheddl_agent.model_gateway import ModelGateway
 from fucktheddl_agent.schemas import AgentRequest, AgentResponse, ApplyResponse, CommitmentsResponse, Proposal, ProposalEditRequest
@@ -20,15 +22,21 @@ class AgentService:
             or not self._model_gateway.settings.enabled
         )
         if server_disabled and not request.model_api_key:
-            from fastapi import HTTPException, status
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="请在设置中填入你的 DeepSeek API Key",
             )
-        model_extraction = self._model_gateway.extract_commitment(
-            request.text,
-            settings=_request_model_settings(request),
-        ) if self._model_gateway else None
+        try:
+            model_extraction = self._model_gateway.extract_commitment(
+                request.text,
+                settings=_request_model_settings(request),
+                suppress_errors=not bool(request.model_api_key),
+            ) if self._model_gateway else None
+        except Exception as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="DeepSeek 调用失败，请检查 API Key、模型地址和模型名称。",
+            ) from error
         commitments = request.commitments if request.commitments is not None else self._store.list_commitments()
         thread_id = f"{user_id}:{request.session_id}"
         state = self._graph.invoke(

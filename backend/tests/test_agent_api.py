@@ -92,6 +92,11 @@ def make_client(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_BASE_URL", "https://codex.example/v1")
     monkeypatch.setenv("OPENAI_MODEL", "deepseek-v4-flash")
     monkeypatch.setenv("OPENAI_DISABLE_THINKING", "true")
+    monkeypatch.setenv("FUCKTHEDDL_USE_MODEL", "true")
+    monkeypatch.setattr(
+        "fucktheddl_agent.model_gateway.ModelGateway.extract_commitment",
+        lambda self, text, settings=None, suppress_errors=True: None,
+    )
     if "FUCKTHEDDL_TODAY" not in os.environ:
         monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-29")
     app = create_app(data_root=tmp_path, job_queue=InlineAgentJobQueue())
@@ -1027,8 +1032,9 @@ def test_agent_query_uses_client_commitment_context_without_server_persistence(t
 def test_agent_propose_uses_request_scoped_model_credentials(tmp_path, monkeypatch):
     captured = {}
 
-    def fake_extract(self, text, settings=None):
+    def fake_extract(self, text, settings=None, suppress_errors=True):
         captured["settings"] = settings
+        captured["suppress_errors"] = suppress_errors
         return {
             "commitment_type": "schedule",
             "title": "测试会议",
@@ -1037,8 +1043,8 @@ def test_agent_propose_uses_request_scoped_model_credentials(tmp_path, monkeypat
             "priority": "medium",
         }
 
-    monkeypatch.setattr("fucktheddl_agent.model_gateway.ModelGateway.extract_commitment", fake_extract)
     client = make_client(tmp_path, monkeypatch)
+    monkeypatch.setattr("fucktheddl_agent.model_gateway.ModelGateway.extract_commitment", fake_extract)
 
     response = client.post(
         "/agent/propose",
@@ -1057,6 +1063,33 @@ def test_agent_propose_uses_request_scoped_model_credentials(tmp_path, monkeypat
     assert captured["settings"].api_key == "user-key"
     assert captured["settings"].enabled is True
     assert captured["settings"].disable_thinking is True
+    assert captured["suppress_errors"] is False
+
+
+def test_agent_propose_rejects_invalid_request_scoped_model_key(tmp_path, monkeypatch):
+    def fake_extract(self, text, settings=None, suppress_errors=True):
+        assert suppress_errors is False
+        raise RuntimeError("401 unauthorized")
+
+    client = make_client(tmp_path, monkeypatch)
+    monkeypatch.setattr("fucktheddl_agent.model_gateway.ModelGateway.extract_commitment", fake_extract)
+
+    response = client.post(
+        "/agent/propose",
+        json={
+            "text": "明天下午三点开会",
+            "session_id": "bad-request-model-credentials",
+            "model_api_key": "bad-user-key",
+            "model_base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-v4-flash",
+            "disable_thinking": True,
+            "commitments": {"events": [], "todos": []},
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["status"] == "failed"
+    assert "DeepSeek 调用失败" in response.json()["error"]
 
 
 def test_confirming_todo_proposal_writes_todo_month_file(tmp_path, monkeypatch):

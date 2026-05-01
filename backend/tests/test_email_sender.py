@@ -1,6 +1,4 @@
-import io
 import json
-from urllib.error import HTTPError, URLError
 
 from fucktheddl_agent.email_sender import EmailDeliveryError, FakeEmailSender, LoginCodeEmail, ResendEmailSender
 
@@ -32,20 +30,20 @@ def test_resend_sender_builds_expected_request(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeResponse:
-        status = 200
+        status_code = 200
+        text = ""
 
-        def __enter__(self):
-            return self
+        def json(self):
+            return {}
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    def fake_urlopen(req, timeout):
-        captured["request"] = req
+    def fake_post(url, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr("fucktheddl_agent.email_sender.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("fucktheddl_agent.email_sender.requests.post", fake_post)
 
     sender.send_login_code(
         LoginCodeEmail(
@@ -56,15 +54,11 @@ def test_resend_sender_builds_expected_request(monkeypatch):
         )
     )
 
-    req = captured["request"]
-
     assert captured["timeout"] == 10
-    assert req.full_url == "https://api.resend.com/emails"
-    assert req.get_method() == "POST"
-    assert req.get_header("Authorization") == "Bearer resend-key"
-    assert req.get_header("Content-type") == "application/json"
+    assert captured["url"] == "https://api.resend.com/emails"
+    assert captured["headers"]["Authorization"] == "Bearer resend-key"
 
-    payload = json.loads(req.data.decode("utf-8"))
+    payload = captured["json"]
     assert payload["from"] == "DDL Agent <noreply@example.com>"
     assert payload["to"] == ["user@example.com"]
     assert payload["subject"] == "你的 DDL Agent 登录验证码"
@@ -75,10 +69,14 @@ def test_resend_sender_builds_expected_request(monkeypatch):
 def test_resend_sender_converts_http_error_to_runtime_error(monkeypatch):
     sender = ResendEmailSender(api_key="resend-key", from_email="noreply@example.com")
 
-    def fake_urlopen(req, timeout):
-        raise HTTPError(req.full_url, 401, "Unauthorized", hdrs=None, fp=None)
+    class FakeResponse:
+        status_code = 401
+        text = ""
 
-    monkeypatch.setattr("fucktheddl_agent.email_sender.request.urlopen", fake_urlopen)
+        def json(self):
+            return {}
+
+    monkeypatch.setattr("fucktheddl_agent.email_sender.requests.post", lambda *args, **kwargs: FakeResponse())
 
     try:
         sender.send_login_code(
@@ -99,11 +97,14 @@ def test_resend_sender_converts_http_error_to_runtime_error(monkeypatch):
 def test_resend_sender_includes_http_error_body_message(monkeypatch):
     sender = ResendEmailSender(api_key="resend-key", from_email="noreply@example.com")
 
-    def fake_urlopen(req, timeout):
-        body = io.BytesIO(b'{"message":"domain is not verified"}')
-        raise HTTPError(req.full_url, 403, "Forbidden", hdrs=None, fp=body)
+    class FakeResponse:
+        status_code = 403
+        text = '{"message":"domain is not verified"}'
 
-    monkeypatch.setattr("fucktheddl_agent.email_sender.request.urlopen", fake_urlopen)
+        def json(self):
+            return json.loads(self.text)
+
+    monkeypatch.setattr("fucktheddl_agent.email_sender.requests.post", lambda *args, **kwargs: FakeResponse())
 
     try:
         sender.send_login_code(
@@ -121,13 +122,17 @@ def test_resend_sender_includes_http_error_body_message(monkeypatch):
         raise AssertionError("expected EmailDeliveryError")
 
 
-def test_resend_sender_converts_url_error_to_runtime_error(monkeypatch):
+def test_resend_sender_includes_plain_http_error_body(monkeypatch):
     sender = ResendEmailSender(api_key="resend-key", from_email="noreply@example.com")
 
-    def fake_urlopen(req, timeout):
-        raise URLError("temporary failure in name resolution")
+    class FakeResponse:
+        status_code = 403
+        text = "domain is not verified"
 
-    monkeypatch.setattr("fucktheddl_agent.email_sender.request.urlopen", fake_urlopen)
+        def json(self):
+            raise json.JSONDecodeError("bad", self.text, 0)
+
+    monkeypatch.setattr("fucktheddl_agent.email_sender.requests.post", lambda *args, **kwargs: FakeResponse())
 
     try:
         sender.send_login_code(
@@ -139,7 +144,8 @@ def test_resend_sender_converts_url_error_to_runtime_error(monkeypatch):
             )
         )
     except EmailDeliveryError as exc:
-        assert str(exc) == "Resend email request failed"
+        assert str(exc) == "Resend email failed with HTTP 403: domain is not verified"
+        assert exc.status_code == 403
     else:
         raise AssertionError("expected EmailDeliveryError")
 
@@ -147,10 +153,10 @@ def test_resend_sender_converts_url_error_to_runtime_error(monkeypatch):
 def test_resend_sender_converts_timeout_error_to_runtime_error(monkeypatch):
     sender = ResendEmailSender(api_key="resend-key", from_email="noreply@example.com")
 
-    def fake_urlopen(req, timeout):
+    def fake_post(*args, **kwargs):
         raise TimeoutError("timed out")
 
-    monkeypatch.setattr("fucktheddl_agent.email_sender.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("fucktheddl_agent.email_sender.requests.post", fake_post)
 
     try:
         sender.send_login_code(

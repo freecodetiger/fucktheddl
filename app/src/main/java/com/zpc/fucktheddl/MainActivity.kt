@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -103,14 +104,20 @@ class MainActivity : ComponentActivity() {
                     )
                     return@FuckTheDdlTheme
                 }
-                val agentApiClient = remember(effectiveSettings) {
-                    AgentApiClient(effectiveSettings.toConfig())
+                val agentApiConfig = effectiveSettings.toConfig()
+                val agentApiClient = remember(agentApiConfig) {
+                    AgentApiClient(agentApiConfig)
                 }
-                val asrClient = remember(effectiveSettings) {
+                val asrClient = remember(agentApiConfig) {
                     AliyunRealtimeAsrClient(
                         context = applicationContext,
                         sessionProvider = { agentApiClient.asrSession() },
                     )
+                }
+                DisposableEffect(asrClient) {
+                    onDispose {
+                        asrClient.release()
+                    }
                 }
                 FuckTheDdlApp(
                     initialState = initialState,

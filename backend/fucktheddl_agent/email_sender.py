@@ -52,14 +52,17 @@ class ResendEmailSender:
             ),
             "text": f"你的 {email.product_name} 登录验证码是 {email.code}，{email.expires_minutes} 分钟内有效。",
         }
-        resp = requests.post(
-            "https://api.resend.com/emails",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            timeout=10,
-        )
+        try:
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=10,
+            )
+        except (requests.RequestException, TimeoutError) as exc:
+            raise EmailDeliveryError("Resend email request failed") from exc
         if resp.status_code >= 400:
             body = resp.text
             detail = ""

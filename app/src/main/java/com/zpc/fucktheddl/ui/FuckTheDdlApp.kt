@@ -2748,6 +2748,8 @@ private fun VoiceAgentDock(
     var isListening by remember { mutableStateOf(false) }
     var voiceText by remember { mutableStateOf("") }
     var voiceCancelArmed by remember { mutableStateOf(false) }
+    val hasModelApiKey = connectionSettings.deepseekApiKey.isNotBlank()
+    val isSignedIn = connectionSettings.accessToken.isNotBlank() && connectionSettings.userEmail.isNotBlank()
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun submit(value: String) {
@@ -2756,9 +2758,14 @@ private fun VoiceAgentDock(
             status = "没有识别到内容"
             return
         }
-        if (connectionSettings.accessToken.isBlank() || connectionSettings.userEmail.isBlank()) {
+        if (!isSignedIn) {
             phase = ComposerPhase.Error
             status = "请先在设置里绑定邮箱"
+            return
+        }
+        if (!hasModelApiKey) {
+            phase = ComposerPhase.Idle
+            status = "先填写 DeepSeek API Key"
             return
         }
         submittedText = prompt
@@ -2856,16 +2863,26 @@ private fun VoiceAgentDock(
             onTodaySelected = onTodaySelected,
             onTodoSelected = onTodoSelected,
             voiceEnabled = asrClient != null &&
-                connectionSettings.accessToken.isNotBlank() &&
-                connectionSettings.userEmail.isNotBlank() &&
+                isSignedIn &&
+                hasModelApiKey &&
                 phase != ComposerPhase.Working &&
                 phase != ComposerPhase.Confirming,
+            voiceHint = when {
+                !isSignedIn -> "登录后可用"
+                !hasModelApiKey -> "填 Key 后可用"
+                else -> ""
+            },
             listening = isListening,
             cancelArmed = voiceCancelArmed,
             onPressStart = {
-                if (connectionSettings.accessToken.isBlank() || connectionSettings.userEmail.isBlank()) {
+                if (!isSignedIn) {
                     status = "请先在设置里绑定邮箱"
                     phase = ComposerPhase.Error
+                    return@BottomVoiceNav
+                }
+                if (!hasModelApiKey) {
+                    status = "先填写 DeepSeek API Key"
+                    phase = ComposerPhase.Idle
                     return@BottomVoiceNav
                 }
                 val client = asrClient
@@ -3602,6 +3619,7 @@ private fun BottomVoiceNav(
     onTodaySelected: () -> Unit,
     onTodoSelected: () -> Unit,
     voiceEnabled: Boolean,
+    voiceHint: String,
     listening: Boolean,
     cancelArmed: Boolean,
     onPressStart: () -> Unit,
@@ -3627,6 +3645,7 @@ private fun BottomVoiceNav(
         )
         VoicePrimaryButton(
             enabled = voiceEnabled,
+            hint = voiceHint,
             listening = listening,
             cancelArmed = cancelArmed,
             onPressStart = onPressStart,
@@ -3782,6 +3801,7 @@ private fun VoiceCancelZone(
 @Composable
 private fun VoicePrimaryButton(
     enabled: Boolean,
+    hint: String,
     listening: Boolean,
     cancelArmed: Boolean,
     onPressStart: () -> Unit,
@@ -3854,6 +3874,14 @@ private fun VoicePrimaryButton(
                 }
             }
         }
+        Text(
+            text = hint,
+            color = BottomMuted.copy(alpha = 0.72f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.height(14.dp),
+        )
     }
 }
 

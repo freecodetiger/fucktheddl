@@ -20,7 +20,12 @@ class ModelGateway:
             "disable_thinking": self.settings.disable_thinking,
         }
 
-    def extract_commitment(self, text: str, settings: ModelSettings | None = None) -> dict[str, object] | None:
+    def extract_commitment(
+        self,
+        text: str,
+        settings: ModelSettings | None = None,
+        suppress_errors: bool = True,
+    ) -> dict[str, object] | None:
         active_settings = settings or self.settings
         if not (active_settings.configured and active_settings.enabled):
             return None
@@ -52,6 +57,8 @@ class ModelGateway:
                 return parsed[0]
             return None
         except Exception:
+            if not suppress_errors:
+                raise
             return None
 
     def build_chat_model(self, settings: ModelSettings | None = None):

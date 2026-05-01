@@ -26,6 +26,24 @@ class AgentApiModelsTest {
     }
 
     @Test
+    fun deepseekSettingsDoNotChangeBackendConnectionConfig() {
+        val base = AgentConnectionSettings(
+            baseUrl = "http://server.example:8001",
+            accessToken = "token-1",
+            deepseekApiKey = "",
+            deepseekBaseUrl = "https://api.deepseek.com/v1",
+            deepseekModel = "deepseek-v4-flash",
+        )
+        val withUserModel = base.copy(
+            deepseekApiKey = "user-model-key",
+            deepseekBaseUrl = "https://custom-model.example/v1",
+            deepseekModel = "custom-model",
+        )
+
+        assertEquals(base.toConfig(), withUserModel.toConfig())
+    }
+
+    @Test
     fun scheduleProposalPayloadKeepsConfirmationBoundary() {
         val proposal = AgentProposal(
             id = "proposal-1",
