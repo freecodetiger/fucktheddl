@@ -1705,6 +1705,7 @@ private fun HomeTodoTimelineRow(
 ) {
     val color = todo.priority.color()
     var expanded by remember(todo.stableUiKey(), todo.detail) { mutableStateOf(false) }
+    var confirmingDelete by remember(todo.stableUiKey()) { mutableStateOf(false) }
     val hasNote = todo.detail.isNotBlank()
     Row(
         modifier = Modifier
@@ -1775,7 +1776,15 @@ private fun HomeTodoTimelineRow(
             )
         }
         if (todo.id.isNotBlank()) {
-            MiniDeleteButton(onClick = onDelete)
+            ConfirmableMiniDeleteButton(
+                confirming = confirmingDelete,
+                onRequestConfirm = { confirmingDelete = true },
+                onConfirm = {
+                    confirmingDelete = false
+                    onDelete()
+                },
+                onCancel = { confirmingDelete = false },
+            )
         }
     }
 }
@@ -3054,6 +3063,7 @@ private fun EventCard(
     onEdit: CommitmentEditRequester,
 ) {
     var expanded by remember(event.id, event.detail) { mutableStateOf(false) }
+    var confirmingDelete by remember(event.id) { mutableStateOf(false) }
     val hasNote = event.detail.isNotBlank()
     Surface(
         color = Panel,
@@ -3105,7 +3115,15 @@ private fun EventCard(
                 ) {
                     MetadataPill(text = event.tag, color = Accent, background = AccentSoft)
                     if (event.id.isNotBlank()) {
-                        MiniDeleteButton(onClick = onDelete)
+                        ConfirmableMiniDeleteButton(
+                            confirming = confirmingDelete,
+                            onRequestConfirm = { confirmingDelete = true },
+                            onConfirm = {
+                                confirmingDelete = false
+                                onDelete()
+                            },
+                            onCancel = { confirmingDelete = false },
+                        )
                     }
                 }
             }

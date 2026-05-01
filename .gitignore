@@ -14,3 +14,8 @@ __pycache__/
 app/build/
 *.keystore
 *.jks
+RELEASE_KEYSTORE.txt
+ChatGPT Image*.png
+out.png
+docs/assets/
+.claude/
