@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Protocol
-from urllib import request
-from urllib.error import HTTPError, URLError
+
+import requests
 
 
 @dataclass(frozen=True)
@@ -52,47 +52,28 @@ class ResendEmailSender:
             ),
             "text": f"你的 {email.product_name} 登录验证码是 {email.code}，{email.expires_minutes} 分钟内有效。",
         }
-        body = json.dumps(payload).encode("utf-8")
-        req = request.Request(
+        resp = requests.post(
             "https://api.resend.com/emails",
-            data=body,
-            method="POST",
+            json=payload,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
             },
+            timeout=10,
         )
-
-        try:
-            with request.urlopen(req, timeout=10) as response:
-                if response.status < 200 or response.status >= 300:
-                    raise RuntimeError(f"Resend email failed with HTTP {response.status}")
-        except HTTPError as exc:
-            detail = _read_http_error_detail(exc)
-            message = f"Resend email failed with HTTP {exc.code}"
+        if resp.status_code >= 400:
+            body = resp.text
+            detail = ""
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    for key in ("message", "error", "detail"):
+                        value = data.get(key)
+                        if isinstance(value, str):
+                            detail = value[:300]
+                            break
+            except json.JSONDecodeError:
+                detail = body[:300]
+            message = f"Resend email failed with HTTP {resp.status_code}"
             if detail:
                 message = f"{message}: {detail}"
-            raise EmailDeliveryError(message, status_code=exc.code) from exc
-        except (URLError, TimeoutError) as exc:
-            raise EmailDeliveryError("Resend email request failed") from exc
-
-
-def _read_http_error_detail(error: HTTPError) -> str:
-    if error.fp is None:
-        return ""
-    try:
-        raw = error.fp.read()
-    except Exception:
-        return ""
-    if not raw:
-        return ""
-    try:
-        payload = json.loads(raw.decode("utf-8", errors="replace"))
-    except json.JSONDecodeError:
-        return raw.decode("utf-8", errors="replace")[:300]
-    if isinstance(payload, dict):
-        for key in ("message", "error", "detail"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                return value[:300]
-    return ""
+            raise EmailDeliveryError(message, status_code=resp.status_code)
