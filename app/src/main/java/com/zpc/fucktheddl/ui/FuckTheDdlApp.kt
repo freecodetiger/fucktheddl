@@ -40,13 +40,18 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimePickerDefaults
 import androidx.compose.material3.TimePickerDialog
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
@@ -794,6 +799,12 @@ private fun ConnectionSettingsOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Canvas.copy(alpha = 0.94f))
+                .pointerInput(panel) {
+                    detectTapGestures(onTap = {
+                        if (panel == SettingsPanel.Root) onClose()
+                        else panel = SettingsPanel.Root
+                    })
+                }
                 .padding(horizontal = 22.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -803,7 +814,10 @@ private fun ConnectionSettingsOverlay(
                 shadowElevation = 20.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, Divider, RoundedCornerShape(28.dp)),
+                    .border(1.dp, Divider, RoundedCornerShape(28.dp))
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { /* consume */ })
+                    },
             ) {
                 Column(
                     modifier = Modifier
@@ -1867,22 +1881,65 @@ private fun DatePickerField(
         val initialMillis = initialDate.atStartOfDay(java.time.ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli()
         val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
 
-        DatePickerDialog(
-            onDismissRequest = { showDialog = false },
-            confirmButton = {
-                TextAction(text = "确定", onClick = {
-                    datePickerState.selectedDateMillis?.let { millis ->
-                        val selectedDate = java.time.Instant.ofEpochMilli(millis)
-                            .atZone(java.time.ZoneId.of("Asia/Shanghai"))
-                            .toLocalDate()
-                        onDateChange(selectedDate.toString())
-                    }
-                    showDialog = false
-                })
-            },
-            dismissButton = { TextAction(text = "取消", onClick = { showDialog = false }) },
-        ) {
-            DatePicker(state = datePickerState)
+        val pickerColors = DatePickerDefaults.colors(
+            containerColor = Panel,
+            titleContentColor = Ink,
+            headlineContentColor = Ink,
+            weekdayContentColor = Muted,
+            subheadContentColor = Ink,
+            navigationContentColor = Ink,
+            dayContentColor = Ink,
+            selectedDayContentColor = readableOn(Accent),
+            selectedDayContainerColor = Accent,
+            todayContentColor = Accent,
+            todayDateBorderColor = Accent,
+            dividerColor = Divider,
+        )
+
+        val isDark = Canvas.luminance() < 0.5f
+        val dialogColorScheme = if (isDark) {
+            darkColorScheme(
+                surface = Panel,
+                surfaceVariant = Panel,
+                background = Canvas,
+                onSurface = Ink,
+                onSurfaceVariant = Muted,
+                primary = Accent,
+                onPrimary = readableOn(Accent),
+                outline = Divider,
+            )
+        } else {
+            lightColorScheme(
+                surface = Panel,
+                surfaceVariant = Panel,
+                background = Canvas,
+                onSurface = Ink,
+                onSurfaceVariant = Muted,
+                primary = Accent,
+                onPrimary = readableOn(Accent),
+                outline = Divider,
+            )
+        }
+
+        MaterialTheme(colorScheme = dialogColorScheme) {
+            DatePickerDialog(
+                onDismissRequest = { showDialog = false },
+                colors = pickerColors,
+                confirmButton = {
+                    TextAction(text = "确定", onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val selectedDate = java.time.Instant.ofEpochMilli(millis)
+                                .atZone(java.time.ZoneId.of("Asia/Shanghai"))
+                                .toLocalDate()
+                            onDateChange(selectedDate.toString())
+                        }
+                        showDialog = false
+                    })
+                },
+                dismissButton = { TextAction(text = "取消", onClick = { showDialog = false }) },
+            ) {
+                DatePicker(state = datePickerState, colors = pickerColors)
+            }
         }
     }
 }
@@ -1930,18 +1987,57 @@ private fun TimePickerField(
             is24Hour = true,
         )
 
-        TimePickerDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("选择时间", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink) },
-            confirmButton = {
-                TextAction(text = "确定", onClick = {
-                    onTimeChange("%02d:%02d".format(timePickerState.hour, timePickerState.minute))
-                    showDialog = false
-                })
-            },
-            dismissButton = { TextAction(text = "取消", onClick = { showDialog = false }) },
-        ) {
-            TimePicker(state = timePickerState)
+        val pickerColors = TimePickerDefaults.colors(
+            containerColor = Panel,
+            clockDialColor = Divider,
+            clockDialSelectedContentColor = Ink,
+            clockDialUnselectedContentColor = Muted,
+            selectorColor = Accent,
+            timeSelectorSelectedContainerColor = Accent,
+            timeSelectorSelectedContentColor = readableOn(Accent),
+            timeSelectorUnselectedContainerColor = Color.Transparent,
+            timeSelectorUnselectedContentColor = Muted,
+        )
+
+        val isDark = Canvas.luminance() < 0.5f
+        val dialogColorScheme = if (isDark) {
+            darkColorScheme(
+                surface = Panel,
+                surfaceVariant = Panel,
+                background = Canvas,
+                onSurface = Ink,
+                onSurfaceVariant = Muted,
+                primary = Accent,
+                onPrimary = readableOn(Accent),
+                outline = Divider,
+            )
+        } else {
+            lightColorScheme(
+                surface = Panel,
+                surfaceVariant = Panel,
+                background = Canvas,
+                onSurface = Ink,
+                onSurfaceVariant = Muted,
+                primary = Accent,
+                onPrimary = readableOn(Accent),
+                outline = Divider,
+            )
+        }
+
+        MaterialTheme(colorScheme = dialogColorScheme) {
+            TimePickerDialog(
+                onDismissRequest = { showDialog = false },
+                title = { Text("选择时间", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink) },
+                confirmButton = {
+                    TextAction(text = "确定", onClick = {
+                        onTimeChange("%02d:%02d".format(timePickerState.hour, timePickerState.minute))
+                        showDialog = false
+                    })
+                },
+                dismissButton = { TextAction(text = "取消", onClick = { showDialog = false }) },
+            ) {
+                TimePicker(state = timePickerState, colors = pickerColors)
+            }
         }
     }
 }
