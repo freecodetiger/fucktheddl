@@ -3,6 +3,7 @@ package com.zpc.fucktheddl.agent
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -18,9 +19,89 @@ class AgentApiClientTest {
             val result = AgentApiClient(AgentApiConfig(baseUrl = baseUrl)).testConnection()
 
             assertEquals(result.toString(), true, result.healthy)
-            assertEquals("后端连接正常", result.label)
+            assertEquals("服务可达", result.label)
             assertTrue(result.detail.contains("deepseek-v4-flash"))
             assertTrue(result.detail.contains("思考: 关闭"))
+        }
+    }
+
+    @Test
+    fun testServiceDoesNotReportHealthyWithoutModelKey() {
+        var proposeCalled = false
+        withHealthServer(statusCode = 200, body = "{\"status\":\"ok\"}") { baseUrl, server ->
+            server.createContext("/agent/propose") { exchange ->
+                proposeCalled = true
+                val bytes = """{"error":"unexpected"}""".toByteArray(Charsets.UTF_8)
+                exchange.sendResponseHeaders(500, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+
+            val result = AgentApiClient(
+                AgentApiConfig(baseUrl = baseUrl),
+            ).testService(AgentConnectionSettings(baseUrl = baseUrl, deepseekApiKey = ""))
+
+            assertFalse(result.healthy)
+            assertEquals("服务未就绪", result.label)
+            assertFalse(proposeCalled)
+        }
+    }
+
+    @Test
+    fun testServiceValidatesModelKeyThroughAgentRequest() {
+        var requestBody = ""
+        withHealthServer(statusCode = 200, body = "{\"status\":\"ok\"}") { baseUrl, server ->
+            server.createContext("/agent/propose") { exchange ->
+                requestBody = exchange.requestBody.bufferedReader().readText()
+                val bytes = """{"job_id":"job-service-test","status":"queued"}""".toByteArray(Charsets.UTF_8)
+                exchange.sendResponseHeaders(202, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+            server.createContext("/agent/jobs/job-service-test") { exchange ->
+                val bytes = """
+                    {
+                      "job_id": "job-service-test",
+                      "status": "succeeded",
+                      "response": {
+                        "session_id": "android-service-test",
+                        "write_policy": "proposal_required",
+                        "chain": [],
+                        "proposal": {
+                          "id": "proposal-service-test",
+                          "commitment_type": "query",
+                          "title": "连接测试",
+                          "summary": "服务可用",
+                          "impact": "",
+                          "requires_confirmation": false,
+                          "schedule_patch": null,
+                          "todo_patch": null,
+                          "delete_patch": null,
+                          "update_patch": null,
+                          "candidates": []
+                        }
+                      },
+                      "error": null
+                    }
+                """.trimIndent().toByteArray(Charsets.UTF_8)
+                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+
+            val result = AgentApiClient(
+                AgentApiConfig(baseUrl = baseUrl, accessToken = "token-1"),
+            ).testService(
+                AgentConnectionSettings(
+                    baseUrl = baseUrl,
+                    accessToken = "token-1",
+                    deepseekApiKey = "sk-test",
+                    deepseekBaseUrl = "https://api.deepseek.com/v1",
+                    deepseekModel = "deepseek-v4-flash",
+                ),
+            )
+
+            assertTrue(result.toString(), result.healthy)
+            assertEquals("服务正常", result.label)
+            assertTrue(requestBody.contains("\"model_api_key\":\"sk-test\""))
+            assertTrue(requestBody.contains("\"disable_thinking\":true"))
         }
     }
 

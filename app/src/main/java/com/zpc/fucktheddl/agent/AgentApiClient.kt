@@ -27,7 +27,7 @@ class AgentApiClient(
                 val thinkingDisabled = text.extractJsonBoolean("disable_thinking")
                 AgentConnectionTestResult(
                     healthy = true,
-                    label = if (status == "ok") "后端连接正常" else "后端已响应",
+                    label = if (status == "ok") "服务可达" else "服务已响应",
                     detail = listOfNotNull(
                         framework.takeIf { it.isNotBlank() }?.let { "Agent: $it" },
                         modelName.takeIf { it.isNotBlank() }?.let { "模型: $it" },
@@ -46,6 +46,38 @@ class AgentApiClient(
                 healthy = false,
                 label = "无法连接后端",
                 detail = error.message?.take(120).orEmpty(),
+            )
+        }
+    }
+
+    fun testService(settings: AgentConnectionSettings): AgentConnectionTestResult {
+        val health = testConnection()
+        if (!health.healthy) {
+            return health.copy(label = "服务不可用")
+        }
+        if (settings.deepseekApiKey.isBlank()) {
+            return AgentConnectionTestResult(
+                healthy = false,
+                label = "服务未就绪",
+            )
+        }
+        val result = propose(
+            text = "今天有哪些安排？",
+            sessionId = "android-service-test-${UUID.randomUUID()}",
+            commitments = AgentCommitmentsPayload(events = emptyList(), todos = emptyList()),
+            settings = settings,
+        )
+        return if (result.error == null) {
+            AgentConnectionTestResult(
+                healthy = true,
+                label = "服务正常",
+                detail = health.detail,
+            )
+        } else {
+            AgentConnectionTestResult(
+                healthy = false,
+                label = "服务不可用",
+                detail = result.error.safeErrorSummary().removePrefix(" · "),
             )
         }
     }

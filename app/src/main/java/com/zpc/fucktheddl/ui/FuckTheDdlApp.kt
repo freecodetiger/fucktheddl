@@ -414,10 +414,10 @@ fun FuckTheDdlApp(
     fun testBackendConnection(settings: AgentConnectionSettings) {
         backendConnectionState = BackendConnectionState(
             indicator = ConnectionIndicator.Checking,
-            label = "连接中",
+            label = "检测中",
         )
         Thread {
-            val result = AgentApiClient(settings.toConfig()).testConnection()
+            val result = AgentApiClient(settings.toConfig()).testService(settings)
             mainHandler.post {
                 backendConnectionState = BackendConnectionState(
                     indicator = if (result.healthy) ConnectionIndicator.Connected else ConnectionIndicator.Failed,
@@ -871,12 +871,6 @@ private fun ConnectionSettingsMenu(
     onSave: () -> Unit,
 ) {
     SettingsHeader(title = "连接", onBack = onBack)
-    Text(
-        text = "后端负责 AI 转发和语音授权。测试只检查后端是否可达，不会提交 DeepSeek Key。",
-        color = Muted,
-        fontSize = 13.sp,
-        lineHeight = 19.sp,
-    )
     OutlinedTextField(
         value = baseUrl,
         onValueChange = onBaseUrlChange,
@@ -935,7 +929,7 @@ private fun ConnectionSettingsMenu(
             .height(50.dp),
     ) {
         Text(
-            text = if (connectionState.indicator == ConnectionIndicator.Checking) "测试中..." else "测试连接",
+            text = if (connectionState.indicator == ConnectionIndicator.Checking) "测试中..." else "测试服务",
             color = Accent,
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1149,7 +1143,7 @@ private fun ConnectionIndicator.color(): Color = when (this) {
 }
 
 private fun ConnectionIndicator.label(): String = when (this) {
-    ConnectionIndicator.Checking -> "连接中"
+    ConnectionIndicator.Checking -> "检测中"
     ConnectionIndicator.Connected -> "已连接"
     ConnectionIndicator.NotConnected -> "未连接"
     ConnectionIndicator.Failed -> "连接失败"
@@ -2764,8 +2758,6 @@ private fun VoiceAgentDock(
             return
         }
         if (!hasModelApiKey) {
-            phase = ComposerPhase.Idle
-            status = "先填写 DeepSeek API Key"
             return
         }
         submittedText = prompt
@@ -2867,11 +2859,6 @@ private fun VoiceAgentDock(
                 hasModelApiKey &&
                 phase != ComposerPhase.Working &&
                 phase != ComposerPhase.Confirming,
-            voiceHint = when {
-                !isSignedIn -> "登录后可用"
-                !hasModelApiKey -> "填 Key 后可用"
-                else -> ""
-            },
             listening = isListening,
             cancelArmed = voiceCancelArmed,
             onPressStart = {
@@ -2881,8 +2868,6 @@ private fun VoiceAgentDock(
                     return@BottomVoiceNav
                 }
                 if (!hasModelApiKey) {
-                    status = "先填写 DeepSeek API Key"
-                    phase = ComposerPhase.Idle
                     return@BottomVoiceNav
                 }
                 val client = asrClient
@@ -3619,7 +3604,6 @@ private fun BottomVoiceNav(
     onTodaySelected: () -> Unit,
     onTodoSelected: () -> Unit,
     voiceEnabled: Boolean,
-    voiceHint: String,
     listening: Boolean,
     cancelArmed: Boolean,
     onPressStart: () -> Unit,
@@ -3645,7 +3629,6 @@ private fun BottomVoiceNav(
         )
         VoicePrimaryButton(
             enabled = voiceEnabled,
-            hint = voiceHint,
             listening = listening,
             cancelArmed = cancelArmed,
             onPressStart = onPressStart,
@@ -3801,7 +3784,6 @@ private fun VoiceCancelZone(
 @Composable
 private fun VoicePrimaryButton(
     enabled: Boolean,
-    hint: String,
     listening: Boolean,
     cancelArmed: Boolean,
     onPressStart: () -> Unit,
@@ -3814,11 +3796,9 @@ private fun VoicePrimaryButton(
     val diagonalCancelY = with(LocalDensity.current) { 22.dp.toPx() }
     val forgivingCancelY = with(LocalDensity.current) { 58.dp.toPx() }
     val upwardFallbackY = with(LocalDensity.current) { 96.dp.toPx() }
-    Column(
-        modifier = Modifier
-            .then(modifier),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
     ) {
         Surface(
             color = when {
@@ -3874,14 +3854,6 @@ private fun VoicePrimaryButton(
                 }
             }
         }
-        Text(
-            text = hint,
-            color = BottomMuted.copy(alpha = 0.72f),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            modifier = Modifier.height(14.dp),
-        )
     }
 }
 
