@@ -131,10 +131,6 @@ class MainActivity : ComponentActivity() {
                         settingsStore.saveThemeMode(mode)
                         themeMode = mode
                     },
-                    onLogout = {
-                        authSessionStore.clear()
-                        authSession = AuthSession(userId = "", email = "", accessToken = "")
-                    },
                 )
             }
         }

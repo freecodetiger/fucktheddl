@@ -393,7 +393,6 @@ fun FuckTheDdlApp(
     userEmail: String = "",
     onConnectionSettingsSaved: (AgentConnectionSettings) -> Unit = {},
     onThemeModeChanged: (AppThemeMode) -> Unit = {},
-    onLogout: () -> Unit = {},
 ) {
     var shellState by remember { mutableStateOf(initialState) }
     val todayTab = remember(shellState.tabs) {
@@ -614,7 +613,6 @@ fun FuckTheDdlApp(
                         testBackendConnection(settings)
                         showingSettings = false
                     },
-                    onLogout = onLogout,
                     onClose = { showingSettings = false },
                 )
             }
@@ -714,7 +712,6 @@ private fun ConnectionSettingsOverlay(
     onThemeModeChanged: (AppThemeMode) -> Unit,
     onTestConnection: (AgentConnectionSettings) -> Unit,
     onSave: (AgentConnectionSettings) -> Unit,
-    onLogout: () -> Unit,
     onClose: () -> Unit,
 ) {
     var panel by remember { mutableStateOf(SettingsPanel.Root) }
@@ -777,8 +774,7 @@ private fun ConnectionSettingsOverlay(
                         SettingsPanel.User -> UserSettingsMenu(
                             email = userEmail,
                             onBack = { panel = SettingsPanel.Root },
-                            onLogout = onLogout,
-                        )
+                                )
 
                         SettingsPanel.Connection -> ConnectionSettingsMenu(
                             baseUrl = baseUrl,
@@ -963,7 +959,6 @@ private fun ConnectionSettingsMenu(
 private fun UserSettingsMenu(
     email: String,
     onBack: () -> Unit,
-    onLogout: () -> Unit,
 ) {
     SettingsHeader(title = "用户", onBack = onBack)
     Text(
@@ -977,23 +972,6 @@ private fun UserSettingsMenu(
         value = email.ifBlank { "未登录" },
         leadingColor = Success,
     )
-    Button(
-        onClick = onLogout,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = DangerSoft,
-        ),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp),
-    ) {
-        Text(
-            text = "退出登录",
-            color = Danger,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
 }
 
 @Composable
