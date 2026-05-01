@@ -18,6 +18,17 @@ android {
     }
     val agentBaseUrl = localProperties.getProperty("agent.baseUrl", "http://127.0.0.1:8000")
 
+    val ksPath = localProperties.getProperty("release.keystorePath")
+        ?: System.getenv("RELEASE_KEYSTORE_PATH")
+    val ksPassword = localProperties.getProperty("release.keystorePassword")
+        ?: System.getenv("RELEASE_KEYSTORE_PASSWORD") ?: "android"
+    val ksAlias = localProperties.getProperty("release.keyAlias")
+        ?: System.getenv("RELEASE_KEY_ALIAS") ?: "ddlagent"
+    val ksKeyPassword = localProperties.getProperty("release.keyPassword")
+        ?: System.getenv("RELEASE_KEY_PASSWORD") ?: "android"
+
+    val hasReleaseKeystore = ksPath != null
+
     defaultConfig {
         applicationId = "com.zpc.fucktheddl"
         minSdk = 26
@@ -32,6 +43,22 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+
+    if (hasReleaseKeystore) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(ksPath!!)
+                storePassword = ksPassword
+                keyAlias = ksAlias
+                keyPassword = ksKeyPassword
+            }
+        }
+        buildTypes {
+            debug {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     androidComponents {

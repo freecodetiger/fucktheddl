@@ -26,6 +26,12 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
+      - name: Decode release keystore
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE }}
+        run: echo "$KEYSTORE_B64" | base64 -d > release.keystore
+
       - name: Configure local.properties
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
@@ -35,6 +41,11 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
+        env:
+          RELEASE_KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew assembleDebug
 
       - name: Upload APK artifact
