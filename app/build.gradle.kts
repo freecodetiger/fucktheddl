@@ -22,8 +22,8 @@ android {
         applicationId = "com.zpc.fucktheddl"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "AGENT_BASE_URL", "\"$agentBaseUrl\"")
@@ -32,6 +32,14 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+
+    androidComponents {
+        onVariants { variant ->
+            variant.outputs.forEach { output ->
+                output.outputFileName.set("DDLAgent-v${defaultConfig.versionName}.apk")
+            }
+        }
     }
 
 }
