@@ -14,12 +14,13 @@ class AgentService:
         self._store = ScheduleStore(data_root)
         self._model_gateway = model_gateway
 
-    def propose(self, request: AgentRequest) -> AgentResponse:
+    def propose(self, request: AgentRequest, user_id: str = "anonymous") -> AgentResponse:
         model_extraction = self._model_gateway.extract_commitment(
             request.text,
             settings=_request_model_settings(request),
         ) if self._model_gateway else None
         commitments = request.commitments if request.commitments is not None else self._store.list_commitments()
+        thread_id = f"{user_id}:{request.session_id}"
         state = self._graph.invoke(
             {
                 "text": request.text,
@@ -28,7 +29,7 @@ class AgentService:
                 "model_extraction": model_extraction,
                 "commitments": commitments,
             },
-            config={"configurable": {"thread_id": request.session_id}},
+            config={"configurable": {"thread_id": thread_id}},
         )
         response = to_response(state)
         if request.commitments is None:

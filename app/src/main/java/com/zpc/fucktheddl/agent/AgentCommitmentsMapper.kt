@@ -18,9 +18,7 @@ fun mapCommitmentsToScheduleState(payload: AgentCommitmentsPayload): AgentCommit
                 date = event.start.toDateLabel(),
                 timeRange = "${event.start.toTimeLabel()} - ${event.end.toTimeLabel()}",
                 title = event.title,
-                detail = event.notes.ifBlank {
-                    event.location.ifBlank { "已创建日程" }
-                },
+                detail = event.notes,
                 tag = event.tags.firstOrNull().orEmpty().ifBlank { "日程" },
                 risk = ScheduleRisk.Normal,
             )
@@ -31,7 +29,7 @@ fun mapCommitmentsToScheduleState(payload: AgentCommitmentsPayload): AgentCommit
                 dueDate = todo.due,
                 title = todo.title,
                 dueLabel = todo.due.toDueLabel(),
-                detail = todo.notes.ifBlank { "已创建待办" },
+                detail = todo.notes,
                 tag = todo.tags.firstOrNull().orEmpty().ifBlank { "待办" },
                 priority = todo.priority.toTodoPriority(),
                 done = todo.status == "done",

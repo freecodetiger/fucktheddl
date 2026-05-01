@@ -32,6 +32,7 @@ class AgentGraphState(TypedDict, total=False):
     date_label: str | None
     due_label: str | None
     priority: str
+    notes: str
     facts_summary: str
     validation_summary: str
     proposal: dict[str, Any]
@@ -66,10 +67,15 @@ def classify_intent(state: AgentGraphState) -> AgentGraphState:
             commitment_type = heuristic["commitment_type"]
         if commitment_type == "clarify" and heuristic["commitment_type"] != "clarify":
             commitment_type = heuristic["commitment_type"]
+        raw_model_notes = model_extraction.get("notes")
+        notes = _extract_notes(text, raw_model_notes)
+        title = _compact_title(str(model_extraction.get("title") or text))
+        if notes and not str(raw_model_notes or "").strip():
+            title = heuristic.get("title") or title
         return {
             **state,
             "commitment_type": commitment_type,
-            "title": str(model_extraction.get("title") or _compact_title(text)),
+            "title": title,
             "time_range": _normalize_model_time(model_extraction.get("time")) or heuristic["time_range"],
             "date_label": _extract_due_date(
                 text,
@@ -77,6 +83,7 @@ def classify_intent(state: AgentGraphState) -> AgentGraphState:
             ),
             "due_label": str(model_extraction.get("due") or "") or heuristic["due_label"],
             "priority": str(model_extraction.get("priority") or "medium"),
+            "notes": notes,
         }
 
     return {**state, **heuristic}
@@ -93,7 +100,7 @@ def _heuristic_classification(text: str) -> AgentGraphState:
             "priority": "medium",
         }
 
-    if any(token in text for token in ("改到", "改成", "修改", "调整", "推迟", "延后")):
+    if _looks_like_update_command(text):
         return {
             "commitment_type": "update",
             "title": _compact_title(text),
@@ -101,6 +108,7 @@ def _heuristic_classification(text: str) -> AgentGraphState:
             "date_label": _extract_due_date(text) if _mentions_date(text) else None,
             "due_label": _extract_due_label(text),
             "priority": "medium",
+            "notes": _extract_notes(text),
         }
 
     if any(token in text for token in ("查", "查看", "看看", "有哪些", "有什么", "有啥", "啥安排", "列出", "今天安排", "明天安排")):
@@ -149,6 +157,7 @@ def _heuristic_classification(text: str) -> AgentGraphState:
         "date_label": date_label,
         "due_label": due_label,
         "priority": "high" if any(token in text for token in ("紧急", "重要", "ddl", "截止")) else "medium",
+        "notes": _extract_notes(text),
     }
 
 
@@ -198,7 +207,7 @@ def draft_proposal(state: AgentGraphState) -> AgentGraphState:
             "end": end,
             "timezone": state["timezone"],
             "location": "",
-            "notes": "",
+            "notes": state.get("notes", ""),
             "tags": [],
             "reminders": [{"offset_minutes": 10, "channel": "local_notification"}]
             if "提醒" in state["text"]
@@ -213,7 +222,7 @@ def draft_proposal(state: AgentGraphState) -> AgentGraphState:
             "due": due,
             "timezone": state["timezone"],
             "priority": state["priority"],
-            "notes": "",
+            "notes": state.get("notes", ""),
             "tags": [],
         }
         summary = f"准备创建待办：{state['title']}，截止到{_format_due_label(due)}。"
@@ -254,7 +263,7 @@ def draft_proposal(state: AgentGraphState) -> AgentGraphState:
                 "end": end,
                 "timezone": state["timezone"],
                 "location": target.get("location", ""),
-                "notes": target.get("notes", ""),
+                "notes": state.get("notes") or target.get("notes", ""),
                 "tags": target.get("tags", []),
                 "reminders": target.get("reminders", []),
             }
@@ -301,7 +310,14 @@ def draft_proposal(state: AgentGraphState) -> AgentGraphState:
                 impact = "当前列表里没有足够接近的候选项。"
     elif commitment_type == "query":
         requires_confirmation = False
-        summary = _query_commitments(state["text"], state.get("commitments", {}))
+        query_items = _query_candidate_items(state["text"], state.get("commitments", {}))
+        candidates = _proposal_candidates(
+            items=query_items,
+            original_text="删除",
+            action_label="删除",
+        )
+        proposal_title = _query_title(state["text"], query_items)
+        summary = _query_commitments(state["text"], state.get("commitments", {}), query_items)
         impact = "这只是查询结果，不会写入任何内容。"
     elif commitment_type == "suggestion":
         requires_confirmation = False
@@ -382,6 +398,14 @@ def _looks_like_deadline_only(text: str) -> bool:
     return any(token in text.lower() for token in ("ddl", "截止", "完成", "due"))
 
 
+def _looks_like_update_command(text: str) -> bool:
+    if any(token in text for token in ("改到", "改成", "修改", "推迟", "延后")):
+        return True
+    if "调整" not in text:
+        return False
+    return any(token in text for token in ("把", "将", "日程", "待办", "时间", "改", "到"))
+
+
 def _extract_time_range(text: str) -> str:
     parsed = _parse_time(text)
     if parsed:
@@ -413,6 +437,10 @@ def _extract_due_date(text: str, fallback_date: str | None = None) -> str:
 
 
 def _extract_explicit_date(text: str, today: date) -> date | None:
+    holiday = _extract_holiday_period_end(text, today)
+    if holiday:
+        return holiday
+
     iso_match = re.search(r"(20\d{2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})", text)
     if iso_match:
         year, month, day = (int(part) for part in iso_match.groups())
@@ -435,6 +463,15 @@ def _extract_explicit_date(text: str, today: date) -> date | None:
     if "周五" in text or "星期五" in text:
         return _next_weekday(today, 4)
     return None
+
+
+def _extract_holiday_period_end(text: str, today: date) -> date | None:
+    if not any(token in text for token in ("五一期间", "五一假期", "劳动节期间", "劳动节假期")):
+        return None
+    candidate = date(today.year, 5, 5)
+    if candidate < today:
+        candidate = date(today.year + 1, 5, 5)
+    return candidate
 
 
 def _extract_start(state: AgentGraphState, timezone_name: str) -> str:
@@ -489,11 +526,73 @@ def _plus_one_hour(start: str) -> str:
     return end.isoformat(timespec="seconds")
 
 
+def _extract_notes(text: str, model_notes: object | None = None) -> str:
+    normalized_model_notes = str(model_notes or "").strip()
+    if normalized_model_notes:
+        return normalized_model_notes
+    _, explicit_notes = _split_notes_tail(text)
+    if explicit_notes:
+        return explicit_notes
+    if _should_preserve_original_as_notes(text):
+        return text.strip()
+    return ""
+
+
+def _split_notes_tail(text: str) -> tuple[str, str]:
+    raw = text.strip()
+    if not raw:
+        return "", ""
+    patterns = (
+        r"(?P<core>.+?)[，,。；;]\s*(?:这个)?(?P<kind>任务|事项)(?:的)?内容(?:是|为|：|:)?(?P<note>.+)$",
+        r"(?P<core>.+?)(?:这个)?(?P<kind>任务|事项)(?:的)?内容(?:是|为|：|:)?(?P<note>.+)$",
+        r"(?P<core>.+?)[，,。；;]\s*(?P<marker>备注(?:是|为)?|备注一下|注意(?:一下)?|记得|到时候|需要|要带|带上|请带|准备好|别忘了|顺便)(?P<note>.+)$",
+        r"(?P<core>.+?)(?P<marker>备注(?:是|为)?|备注一下|注意(?:一下)?|记得|到时候|别忘了|顺便)(?P<note>.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if not match:
+            continue
+        core = match.group("core").strip(" ，,。；;")
+        note = match.group("note").strip(" ：:，,。；;")
+        if not core or not note:
+            continue
+        kind = match.groupdict().get("kind", "")
+        if kind and core.endswith(("一个", "这个", "某个")):
+            core = f"{core}{kind}"
+        marker = match.groupdict().get("marker", "")
+        if not marker:
+            return core, note
+        if marker.startswith("备注"):
+            return core, note
+        return core, f"{marker}{note}"
+    return raw, ""
+
+
+def _should_preserve_original_as_notes(text: str) -> bool:
+    raw = text.strip()
+    if len(raw) < 24:
+        return False
+    if any(token in raw for token in ("备注", "记得", "注意", "到时候", "别忘了", "顺便")):
+        return True
+    if not re.search(r"[，,。；;]", raw):
+        return False
+    tail = re.split(r"[，,。；;]", raw, maxsplit=1)[1].strip()
+    if not tail:
+        return False
+    if re.fullmatch(r"(提前|到时候)?[零〇一二两三四五六七八九十\d]{0,3}\s*(分钟|小时)?提醒我?", tail):
+        return False
+    return any(token in tail for token in ("说", "可能", "临时", "流程", "材料", "准备", "带", "发消息", "联系", "如果", "因为", "先"))
+
+
 def _compact_title(text: str) -> str:
+    text, _ = _split_notes_tail(text)
+    if _should_preserve_original_as_notes(text):
+        text = re.split(r"[，,。；;]", text, maxsplit=1)[0]
     cleaned = text.strip().replace("，", " ").replace(",", " ")
-    cleaned = re.sub(r"(删除|删掉|取消|移除|修改|调整|改到|改成|提前|推迟|查询|查看|列出|帮我|请|一下)", " ", cleaned)
+    cleaned = re.sub(r"(删除|删掉|取消|移除|修改|调整|改到|改成|提前|推迟|查询|查看|列出|完成|帮我|请|一下)", " ", cleaned)
     cleaned = re.sub(r"20\d{2}\s*[-年]\s*\d{1,2}\s*[-月]\s*\d{1,2}\s*(日|号)?", " ", cleaned)
     cleaned = re.sub(r"[零〇一二两三四五六七八九十\d]{1,3}\s*月\s*[零〇一二两三四五六七八九十\d]{1,3}\s*(日|号)?", " ", cleaned)
+    cleaned = re.sub(r"(五一|劳动节)(期间|假期)?", " ", cleaned)
     cleaned = re.sub(r"(今天|明天|后天)?(上午|下午|晚上|早上|中午|凌晨)?\s*\d{1,2}\s*[:：]\s*\d{2}", " ", cleaned)
     cleaned = re.sub(r"(今天|明天|后天)?(上午|下午|晚上|早上|中午|凌晨)?\s*[零〇一二两三四五六七八九十\d]{1,3}\s*点\s*(半)?钟?", " ", cleaned)
     for token in (
@@ -591,7 +690,11 @@ def _fallback_candidates(text: str, commitments: dict[str, list[dict[str, Any]]]
     return sorted(pool, key=lambda item: (item.get("date", ""), item.get("time", "")))[:5]
 
 
-def _proposal_candidates(items: list[dict[str, Any]], original_text: str) -> list[dict[str, str]]:
+def _proposal_candidates(
+    items: list[dict[str, Any]],
+    original_text: str,
+    action_label: str = "选择",
+) -> list[dict[str, str]]:
     result = []
     for item in items[:5]:
         when = _candidate_when(item)
@@ -603,6 +706,7 @@ def _proposal_candidates(items: list[dict[str, Any]], original_text: str) -> lis
                 "when": when,
                 "detail": item.get("notes", "") or _type_label(item["type"]),
                 "resolution_text": f"{original_text} #{item.get('id', '')}",
+                "action_label": action_label,
             }
         )
     return result
@@ -636,16 +740,46 @@ def _commitment_candidates(commitments: dict[str, list[dict[str, Any]]]) -> list
     return events + todos
 
 
-def _query_commitments(text: str, commitments: dict[str, list[dict[str, Any]]]) -> str:
+def _query_candidate_items(text: str, commitments: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    candidates = _commitment_candidates(commitments)
+    if not candidates:
+        return []
+    target_date = _extract_due_date(text) if _mentions_date(text) else ""
+    filtered = [item for item in candidates if not target_date or item.get("date") == target_date]
+    if any(token in text for token in ("活动", "日程", "课程", "课", "会议", "会")):
+        filtered = [item for item in filtered if item["type"] == "schedule"]
+    elif any(token in text for token in ("待办", "任务", "作业", "ddl", "截止")):
+        filtered = [item for item in filtered if item["type"] == "todo"]
+    filtered.sort(key=lambda item: (item.get("date", ""), item.get("time", ""), item.get("title", "")))
+    return filtered[:8]
+
+
+def _query_title(text: str, items: list[dict[str, Any]]) -> str:
+    if "今天" in text:
+        return "今天"
+    if "明天" in text:
+        return "明天"
+    if "后天" in text:
+        return "后天"
+    if items:
+        return _format_due_label(items[0].get("date", ""))
+    return "查询结果"
+
+
+def _query_commitments(
+    text: str,
+    commitments: dict[str, list[dict[str, Any]]],
+    filtered: list[dict[str, Any]] | None = None,
+) -> str:
     candidates = _commitment_candidates(commitments)
     if not candidates:
         return "当前没有已确认的日程或待办。"
     target_date = _extract_due_date(text) if _mentions_date(text) else ""
-    filtered = [item for item in candidates if not target_date or item.get("date") == target_date]
-    if not filtered:
+    items = filtered if filtered is not None else _query_candidate_items(text, commitments)
+    if not items:
         return f"{_format_due_label(target_date)}没有安排。"
     lines = []
-    for item in filtered[:5]:
+    for item in items[:5]:
         if item["type"] == "schedule":
             lines.append(f"{item.get('time', '')} {item['title']}")
         else:
@@ -674,7 +808,7 @@ def _type_label(commitment_type: str) -> str:
 
 def _mentions_date(text: str) -> bool:
     return bool(
-        any(token in text for token in ("今天", "明天", "后天", "周", "星期", "-"))
+        any(token in text for token in ("今天", "明天", "后天", "周", "星期", "-", "五一", "劳动节"))
         or re.search(r"[零〇一二两三四五六七八九十\d]{1,3}\s*月\s*[零〇一二两三四五六七八九十\d]{1,3}\s*(?:日|号)?", text)
     )
 

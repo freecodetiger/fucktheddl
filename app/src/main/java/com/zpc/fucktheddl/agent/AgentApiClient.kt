@@ -1,10 +1,12 @@
 package com.zpc.fucktheddl.agent
 
+import com.zpc.fucktheddl.auth.LoginCodeVerifyResult
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 
 class AgentApiClient(
     private val config: AgentApiConfig,
@@ -48,9 +50,41 @@ class AgentApiClient(
         }
     }
 
+    fun requestLoginCode(email: String): String? {
+        return try {
+            postJsonAllowEmpty(
+                "auth/code/request",
+                JSONObject().put("email", email.trim()),
+            )
+            null
+        } catch (error: Exception) {
+            error.message ?: "验证码发送失败"
+        }
+    }
+
+    fun verifyLoginCode(email: String, code: String): LoginCodeVerifyResult {
+        return try {
+            val response = postJson(
+                "auth/code/verify",
+                JSONObject()
+                    .put("email", email.trim())
+                    .put("code", code.trim()),
+            )
+            LoginCodeVerifyResult(
+                userId = response.optString("user_id", ""),
+                email = response.optString("email", ""),
+                accessToken = response.optString("access_token", ""),
+                newlyCreated = response.optBoolean("newly_created", false),
+                error = null,
+            )
+        } catch (error: Exception) {
+            LoginCodeVerifyResult(error = error.message ?: "登录失败")
+        }
+    }
+
     fun propose(
         text: String,
-        sessionId: String = "android",
+        sessionId: String = "android-${UUID.randomUUID()}",
         commitments: AgentCommitmentsPayload? = null,
         settings: AgentConnectionSettings? = null,
     ): AgentSubmitResult {
@@ -67,6 +101,9 @@ class AgentApiClient(
                     .put("disable_thinking", true)
             }
             val response = postJson("agent/propose", body)
+            if (response.has("job_id")) {
+                return pollAgentJob(response.getString("job_id"))
+            }
             AgentSubmitResult(
                 proposal = parseProposal(response.getJSONObject("proposal")),
                 error = null,
@@ -74,6 +111,30 @@ class AgentApiClient(
         } catch (error: Exception) {
             AgentSubmitResult(proposal = null, error = error.message ?: "请求失败")
         }
+    }
+
+    private fun pollAgentJob(jobId: String): AgentSubmitResult {
+        repeat(60) {
+            val body = getJson("agent/jobs/$jobId")
+            when (body.optString("status")) {
+                "succeeded" -> {
+                    val response = body.optJSONObject("response")
+                        ?: return AgentSubmitResult(proposal = null, error = "任务结果为空")
+                    return AgentSubmitResult(
+                        proposal = parseProposal(response.getJSONObject("proposal")),
+                        error = null,
+                    )
+                }
+                "failed" -> {
+                    return AgentSubmitResult(
+                        proposal = null,
+                        error = body.optString("error", "AI 任务失败"),
+                    )
+                }
+            }
+            Thread.sleep(500)
+        }
+        return AgentSubmitResult(proposal = null, error = "AI 任务超时")
     }
 
     fun editProposal(proposal: AgentProposal): AgentSubmitResult {
@@ -137,6 +198,36 @@ class AgentApiClient(
         return JSONObject(text)
     }
 
+    private fun postJsonAllowEmpty(path: String, body: JSONObject) {
+        val connection = URL(config.normalizedBaseUrl + path).openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 20000
+        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        connection.applyAuth()
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(body.toString())
+        }
+        val text = connection.responseText()
+        if (connection.responseCode !in 200..299) {
+            error(text)
+        }
+    }
+
+    private fun getJson(path: String): JSONObject {
+        val connection = URL(config.normalizedBaseUrl + path).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 5000
+        connection.readTimeout = 10000
+        connection.applyAuth()
+        val text = connection.responseText()
+        if (connection.responseCode !in 200..299) {
+            error(text)
+        }
+        return JSONObject(text)
+    }
+
     private fun apply(path: String): AgentApplyResult {
         return try {
             val body = postJson(path, JSONObject())
@@ -153,6 +244,7 @@ class AgentApiClient(
     private fun HttpURLConnection.applyAuth() {
         if (config.accessToken.isNotBlank()) {
             setRequestProperty("X-Agent-Token", config.accessToken)
+            setRequestProperty("Authorization", "Bearer ${config.accessToken}")
         }
     }
 
@@ -365,6 +457,7 @@ private fun JSONObject.optCandidateList(name: String): List<AgentProposalCandida
             whenLabel = item.optString("when", ""),
             detail = item.optString("detail", ""),
             resolutionText = item.optString("resolution_text", ""),
+            actionLabel = item.optString("action_label", "选择"),
         )
     }.filter { it.resolutionText.isNotBlank() && it.title.isNotBlank() }
 }

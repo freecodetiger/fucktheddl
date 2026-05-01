@@ -37,10 +37,34 @@ class AsrSettings:
 
 
 @dataclass(frozen=True)
+class EmailSettings:
+    resend_api_key: str
+    resend_from_email: str
+    resend_from_name: str = "DDL Agent"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.resend_api_key and self.resend_from_email)
+
+
+@dataclass(frozen=True)
+class QueueSettings:
+    redis_url: str | None
+    worker_count: int
+    job_ttl_seconds: int
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.redis_url)
+
+
+@dataclass(frozen=True)
 class AppSettings:
     data_root: Path
     model: ModelSettings
     asr: AsrSettings
+    email: EmailSettings
+    queue: QueueSettings
 
 
 def load_settings(data_root: Path | None = None) -> AppSettings:
@@ -56,4 +80,14 @@ def load_settings(data_root: Path | None = None) -> AppSettings:
         api_key=os.environ.get("ALIYUN_API_KEY"),
         url=os.environ.get("ALIYUN_ASR_URL", "wss://dashscope.aliyuncs.com/api-ws/v1/inference"),
     )
-    return AppSettings(data_root=root, model=model, asr=asr)
+    email = EmailSettings(
+        resend_api_key=os.environ.get("RESEND_API_KEY", ""),
+        resend_from_email=os.environ.get("RESEND_FROM_EMAIL", ""),
+        resend_from_name=os.environ.get("RESEND_FROM_NAME", "DDL Agent"),
+    )
+    queue = QueueSettings(
+        redis_url=os.environ.get("FUCKTHEDDL_REDIS_URL") or os.environ.get("REDIS_URL") or "redis://127.0.0.1:6379/0",
+        worker_count=max(1, int(os.environ.get("FUCKTHEDDL_AGENT_WORKERS", "2"))),
+        job_ttl_seconds=max(60, int(os.environ.get("FUCKTHEDDL_JOB_TTL_SECONDS", "3600"))),
+    )
+    return AppSettings(data_root=root, model=model, asr=asr, email=email, queue=queue)

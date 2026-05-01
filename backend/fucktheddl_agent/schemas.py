@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 CommitmentType = Literal["schedule", "todo", "delete", "update", "query", "suggestion", "clarify"]
 StepState = Literal["done", "active", "waiting"]
 CommitmentStatus = Literal["confirmed", "cancelled", "done", "active"]
+AgentJobState = Literal["queued", "running", "succeeded", "failed"]
 
 
 class AgentRequest(BaseModel):
@@ -90,6 +91,7 @@ class ProposalCandidate(BaseModel):
     when: str
     detail: str = ""
     resolution_text: str
+    action_label: str = "选择"
 
 
 class Proposal(BaseModel):
@@ -118,6 +120,18 @@ class AgentResponse(BaseModel):
     write_policy: Literal["proposal_required"]
     chain: list[ChainStep]
     proposal: Proposal
+
+
+class AgentJobAccepted(BaseModel):
+    job_id: str
+    status: Literal["queued"]
+
+
+class AgentJobStatus(BaseModel):
+    job_id: str
+    status: AgentJobState
+    response: AgentResponse | None = None
+    error: str | None = None
 
 
 class ModelConfigResponse(BaseModel):

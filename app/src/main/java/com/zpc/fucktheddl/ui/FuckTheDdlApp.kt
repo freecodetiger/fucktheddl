@@ -2,6 +2,7 @@ package com.zpc.fucktheddl.ui
 
 import android.os.Handler
 import android.os.Looper
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -34,17 +36,23 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -52,11 +60,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -72,6 +85,8 @@ import com.zpc.fucktheddl.agent.AgentTodoPatch
 import com.zpc.fucktheddl.agent.ProposalPresentation
 import com.zpc.fucktheddl.agent.mapCommitmentsToScheduleState
 import com.zpc.fucktheddl.agent.presentation
+import com.zpc.fucktheddl.agent.toScheduleUpdateProposal
+import com.zpc.fucktheddl.agent.toTodoUpdateProposal
 import com.zpc.fucktheddl.schedule.ScheduleEvent
 import com.zpc.fucktheddl.schedule.ScheduleRisk
 import com.zpc.fucktheddl.schedule.ScheduleShellState
@@ -87,24 +102,172 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private val Ink = Color(0xFF14282E)
-private val InkSoft = Color(0xFF355158)
-private val Muted = Color(0xFF75858A)
-private val Divider = Color(0xFFE3E8EA)
-private val Canvas = Color(0xFFFFFFFF)
-private val Panel = Color(0xFFFFFFFF)
-private val Accent = Color(0xFF2F7D8C)
-private val AccentSoft = Color(0xFFEAF3F5)
-private val Risk = Color(0xFFD88A3D)
-private val RiskSoft = Color(0xFFFFF5E9)
-private val Danger = Color(0xFFC94F4F)
-private val DangerSoft = Color(0xFFFFECEB)
-private val Success = Color(0xFF6FA58B)
-private val SuccessSoft = Color(0xFFEFF6F2)
-private val BottomInk = Color(0xFF111111)
-private val BottomMuted = Color(0xFF8A8A8E)
-private val VoiceIdle = Color(0xFF111111)
-private val VoiceDisabled = Color(0xFFE8E8EA)
+enum class AppThemeMode(
+    val storageKey: String,
+    val label: String,
+    val description: String,
+) {
+    ClassicLight("classic_light", "经典浅色", "当前主题"),
+    Dark("dark", "深色", "纯黑深色"),
+    FogBlue("fog_blue", "雾蓝", "更冷静的浅色");
+
+    companion object {
+        fun fromStorage(storageKey: String?): AppThemeMode {
+            return values().firstOrNull { it.storageKey == storageKey } ?: ClassicLight
+        }
+    }
+}
+
+private data class AppColors(
+    val ink: Color,
+    val inkSoft: Color,
+    val muted: Color,
+    val divider: Color,
+    val canvas: Color,
+    val panel: Color,
+    val accent: Color,
+    val accentSoft: Color,
+    val risk: Color,
+    val riskSoft: Color,
+    val danger: Color,
+    val dangerSoft: Color,
+    val success: Color,
+    val successSoft: Color,
+    val bottomInk: Color,
+    val bottomMuted: Color,
+    val bottomBar: Color,
+    val voiceIdle: Color,
+    val voiceDisabled: Color,
+    val voiceGlyph: Color,
+    val voiceDisabledGlyph: Color,
+)
+
+private val ClassicLightColors = AppColors(
+    ink = Color(0xFF14282E),
+    inkSoft = Color(0xFF355158),
+    muted = Color(0xFF75858A),
+    divider = Color(0xFFE3E8EA),
+    canvas = Color(0xFFFFFFFF),
+    panel = Color(0xFFFFFFFF),
+    accent = Color(0xFF2F7D8C),
+    accentSoft = Color(0xFFEAF3F5),
+    risk = Color(0xFFD88A3D),
+    riskSoft = Color(0xFFFFF5E9),
+    danger = Color(0xFFC94F4F),
+    dangerSoft = Color(0xFFFFECEB),
+    success = Color(0xFF6FA58B),
+    successSoft = Color(0xFFEFF6F2),
+    bottomInk = Color(0xFF111111),
+    bottomMuted = Color(0xFF8A8A8E),
+    bottomBar = Color(0xFFFFFFFF),
+    voiceIdle = Color(0xFF111111),
+    voiceDisabled = Color(0xFFE8E8EA),
+    voiceGlyph = Color(0xFFFFFFFF),
+    voiceDisabledGlyph = Color(0xFF8A8A8E),
+)
+
+private val DarkColors = AppColors(
+    ink = Color(0xFFF5F5F7),
+    inkSoft = Color(0xFFD1D1D6),
+    muted = Color(0xFF8E8E93),
+    divider = Color(0xFF2C2C2E),
+    canvas = Color(0xFF000000),
+    panel = Color(0xFF1C1C1E),
+    accent = Color(0xFFF5F5F7),
+    accentSoft = Color(0xFF2C2C2E),
+    risk = Color(0xFF8E8E93),
+    riskSoft = Color(0xFF1C1C1E),
+    danger = Color(0xFF8E8E93),
+    dangerSoft = Color(0xFF2C2C2E),
+    success = Color(0xFFC7C7CC),
+    successSoft = Color(0xFF2C2C2E),
+    bottomInk = Color(0xFFF5F5F7),
+    bottomMuted = Color(0xFF8E8E93),
+    bottomBar = Color(0xFF000000),
+    voiceIdle = Color(0xFFF5F5F7),
+    voiceDisabled = Color(0xFF2C2C2E),
+    voiceGlyph = Color(0xFF000000),
+    voiceDisabledGlyph = Color(0xFF8E8E93),
+)
+
+private val FogBlueColors = AppColors(
+    ink = Color(0xFF172332),
+    inkSoft = Color(0xFF41556A),
+    muted = Color(0xFF718197),
+    divider = Color(0xFFDFE7EE),
+    canvas = Color(0xFFF7F9FB),
+    panel = Color(0xFFFFFFFF),
+    accent = Color(0xFF5F7E9B),
+    accentSoft = Color(0xFFEDF3F8),
+    risk = Color(0xFFC58B47),
+    riskSoft = Color(0xFFFFF4E6),
+    danger = Color(0xFFC85D65),
+    dangerSoft = Color(0xFFFFEDEF),
+    success = Color(0xFF6C9F91),
+    successSoft = Color(0xFFEEF7F4),
+    bottomInk = Color(0xFF152233),
+    bottomMuted = Color(0xFF718197),
+    bottomBar = Color(0xFFFAFCFE),
+    voiceIdle = Color(0xFF152233),
+    voiceDisabled = Color(0xFFE7EEF4),
+    voiceGlyph = Color(0xFFFFFFFF),
+    voiceDisabledGlyph = Color(0xFF718197),
+)
+
+private val LocalAppColors = staticCompositionLocalOf { ClassicLightColors }
+
+private fun AppThemeMode.colors(): AppColors = when (this) {
+    AppThemeMode.ClassicLight -> ClassicLightColors
+    AppThemeMode.Dark -> DarkColors
+    AppThemeMode.FogBlue -> FogBlueColors
+}
+
+private val Ink: Color
+    @Composable get() = LocalAppColors.current.ink
+private val InkSoft: Color
+    @Composable get() = LocalAppColors.current.inkSoft
+private val Muted: Color
+    @Composable get() = LocalAppColors.current.muted
+private val Divider: Color
+    @Composable get() = LocalAppColors.current.divider
+private val Canvas: Color
+    @Composable get() = LocalAppColors.current.canvas
+private val Panel: Color
+    @Composable get() = LocalAppColors.current.panel
+private val Accent: Color
+    @Composable get() = LocalAppColors.current.accent
+private val AccentSoft: Color
+    @Composable get() = LocalAppColors.current.accentSoft
+private val Risk: Color
+    @Composable get() = LocalAppColors.current.risk
+private val RiskSoft: Color
+    @Composable get() = LocalAppColors.current.riskSoft
+private val Danger: Color
+    @Composable get() = LocalAppColors.current.danger
+private val DangerSoft: Color
+    @Composable get() = LocalAppColors.current.dangerSoft
+private val Success: Color
+    @Composable get() = LocalAppColors.current.success
+private val SuccessSoft: Color
+    @Composable get() = LocalAppColors.current.successSoft
+private val BottomInk: Color
+    @Composable get() = LocalAppColors.current.bottomInk
+private val BottomMuted: Color
+    @Composable get() = LocalAppColors.current.bottomMuted
+private val BottomBar: Color
+    @Composable get() = LocalAppColors.current.bottomBar
+private val VoiceIdle: Color
+    @Composable get() = LocalAppColors.current.voiceIdle
+private val VoiceDisabled: Color
+    @Composable get() = LocalAppColors.current.voiceDisabled
+private val VoiceGlyph: Color
+    @Composable get() = LocalAppColors.current.voiceGlyph
+private val VoiceDisabledGlyph: Color
+    @Composable get() = LocalAppColors.current.voiceDisabledGlyph
+
+private fun readableOn(color: Color): Color {
+    return if (color.luminance() > 0.55f) Color.Black else Color.White
+}
 
 private val TodayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.CHINA)
 
@@ -121,6 +284,26 @@ private enum class BottomNavIcon {
     Today,
     Todo,
 }
+
+private enum class SettingsPanel {
+    Root,
+    User,
+    Connection,
+    Theme,
+}
+
+private enum class ConnectionIndicator {
+    Checking,
+    Connected,
+    NotConnected,
+    Failed,
+}
+
+private data class BackendConnectionState(
+    val indicator: ConnectionIndicator = ConnectionIndicator.NotConnected,
+    val label: String = "未连接",
+    val detail: String = "",
+)
 
 private data class EditableProposalDraft(
     val title: String,
@@ -164,16 +347,53 @@ private data class EditableProposalDraft(
     }
 }
 
+private sealed interface CommitmentEditTarget {
+    data class Schedule(val event: ScheduleEvent) : CommitmentEditTarget
+    data class Todo(val todo: TodoItem) : CommitmentEditTarget
+}
+
+private data class CommitmentEditMenuRequest(
+    val target: CommitmentEditTarget,
+    val anchor: Offset,
+)
+
+private typealias CommitmentEditRequester = (CommitmentEditTarget, Offset) -> Unit
+
+private fun Modifier.commitmentLongPressMenu(
+    target: CommitmentEditTarget?,
+    onEdit: CommitmentEditRequester,
+    onTap: () -> Unit = {},
+    onBeforeEdit: () -> Unit = {},
+): Modifier = composed {
+    var origin by remember(target) { mutableStateOf(Offset.Zero) }
+    onGloballyPositioned { origin = it.positionInRoot() }
+        .pointerInput(target) {
+            detectTapGestures(
+                onLongPress = { pressOffset ->
+                    target?.let {
+                        onBeforeEdit()
+                        onEdit(it, origin + pressOffset)
+                    }
+                },
+                onTap = { onTap() },
+            )
+        }
+}
+
 @Composable
 fun FuckTheDdlApp(
     initialState: ScheduleShellState,
     connectionSettings: AgentConnectionSettings,
+    themeMode: AppThemeMode = AppThemeMode.ClassicLight,
     agentApiClient: AgentApiClient? = null,
     asrClient: RealtimeAsrClient? = null,
     commitmentsProvider: () -> AgentCommitmentsPayload = { AgentCommitmentsPayload(emptyList(), emptyList()) },
     proposalApplier: (AgentProposal) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
     commitmentDeleter: (String) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
+    userEmail: String = "",
     onConnectionSettingsSaved: (AgentConnectionSettings) -> Unit = {},
+    onThemeModeChanged: (AppThemeMode) -> Unit = {},
+    onLogout: () -> Unit = {},
 ) {
     var shellState by remember { mutableStateOf(initialState) }
     val todayTab = remember(shellState.tabs) {
@@ -187,9 +407,27 @@ fun FuckTheDdlApp(
     var selectedTab by remember { mutableStateOf(if (initialState.selectedTab.destination == TabDestination.Todo) todoTab else todayTab) }
     var showingCalendar by remember { mutableStateOf(false) }
     var showingSettings by remember { mutableStateOf(false) }
-    var connectionLabel by remember { mutableStateOf(initialState.syncState.label) }
-    var connectionHealthy by remember { mutableStateOf(true) }
+    var activeEditMenu by remember { mutableStateOf<CommitmentEditMenuRequest?>(null) }
+    var activeEditTarget by remember { mutableStateOf<CommitmentEditTarget?>(null) }
+    var backendConnectionState by remember { mutableStateOf(BackendConnectionState()) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    fun testBackendConnection(settings: AgentConnectionSettings) {
+        backendConnectionState = BackendConnectionState(
+            indicator = ConnectionIndicator.Checking,
+            label = "连接中",
+        )
+        Thread {
+            val result = AgentApiClient(settings.toConfig()).testConnection()
+            mainHandler.post {
+                backendConnectionState = BackendConnectionState(
+                    indicator = if (result.healthy) ConnectionIndicator.Connected else ConnectionIndicator.Failed,
+                    label = result.label,
+                    detail = result.detail,
+                )
+            }
+        }.start()
+    }
 
     fun refreshCommitments() {
         Thread {
@@ -201,13 +439,13 @@ fun FuckTheDdlApp(
                         events = commitments.events,
                         todos = commitments.todos,
                     )
-                    connectionLabel = "本地"
-                    connectionHealthy = true
                 }
             }.onFailure { error ->
                 mainHandler.post {
-                    connectionLabel = error.message?.takeIf { it.isNotBlank() } ?: "本地读取失败"
-                    connectionHealthy = false
+                    backendConnectionState = BackendConnectionState(
+                        indicator = ConnectionIndicator.Failed,
+                        label = error.message?.takeIf { it.isNotBlank() } ?: "本地读取失败",
+                    )
                 }
             }
         }.start()
@@ -215,20 +453,38 @@ fun FuckTheDdlApp(
 
     fun deleteCommitment(commitmentId: String) {
         if (commitmentId.isBlank()) {
-            connectionLabel = "无法删除"
-            connectionHealthy = false
+            backendConnectionState = BackendConnectionState(
+                indicator = ConnectionIndicator.Failed,
+                label = "无法删除",
+            )
             return
         }
         Thread {
             val result = commitmentDeleter(commitmentId)
             mainHandler.post {
                 if (result.error == null) {
-                    connectionLabel = "已删除"
-                    connectionHealthy = true
                     refreshCommitments()
                 } else {
-                    connectionLabel = result.error
-                    connectionHealthy = false
+                    backendConnectionState = BackendConnectionState(
+                        indicator = ConnectionIndicator.Failed,
+                        label = result.error,
+                    )
+                }
+            }
+        }.start()
+    }
+
+    fun updateCommitment(proposal: AgentProposal) {
+        Thread {
+            val result = proposalApplier(proposal)
+            mainHandler.post {
+                if (result.error == null) {
+                    refreshCommitments()
+                } else {
+                    backendConnectionState = BackendConnectionState(
+                        indicator = ConnectionIndicator.Failed,
+                        label = result.error,
+                    )
                 }
             }
         }.start()
@@ -236,98 +492,139 @@ fun FuckTheDdlApp(
 
     LaunchedEffect(agentApiClient) {
         refreshCommitments()
+        testBackendConnection(connectionSettings)
     }
 
-    Scaffold(
-        containerColor = Canvas,
-        bottomBar = {
-            BottomWorkspace(
-                selectedTab = selectedTab,
-                onTodaySelected = {
-                    selectedTab = todayTab
-                    showingCalendar = false
-                },
-                onTodoSelected = {
-                    selectedTab = todoTab
-                    showingCalendar = false
-                },
-                agentApiClient = agentApiClient,
-                asrClient = asrClient,
-                connectionSettings = connectionSettings,
-                commitmentsProvider = commitmentsProvider,
-                proposalApplier = proposalApplier,
-                onCommitmentsChanged = ::refreshCommitments,
-            )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 18.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            CompactHeader(
-                connectionLabel = connectionLabel,
-                connectionHealthy = connectionHealthy,
-                onDateClick = {
-                    selectedTab = todayTab
-                    showingCalendar = true
-                },
-                onSettingsClick = { showingSettings = true },
-            )
-            when {
-                showingCalendar -> CalendarSurface(
-                    events = shellState.events,
-                    todos = shellState.todos,
-                    onDeleteCommitment = ::deleteCommitment,
+    CompositionLocalProvider(LocalAppColors provides themeMode.colors()) {
+        Scaffold(
+            containerColor = Canvas,
+            bottomBar = {
+                BottomWorkspace(
+                    selectedTab = selectedTab,
+                    onTodaySelected = {
+                        selectedTab = todayTab
+                        showingCalendar = false
+                    },
+                    onTodoSelected = {
+                        selectedTab = todoTab
+                        showingCalendar = false
+                    },
+                    agentApiClient = agentApiClient,
+                    asrClient = asrClient,
+                    connectionSettings = connectionSettings,
+                    commitmentsProvider = commitmentsProvider,
+                    proposalApplier = proposalApplier,
+                    onCommitmentsChanged = ::refreshCommitments,
+                )
+            },
+        ) { innerPadding ->
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                )
+                        .fillMaxSize()
+                        .blur(if (activeEditTarget != null) 18.dp else 0.dp)
+                        .padding(innerPadding)
+                        .padding(horizontal = 18.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                ) {
+                    CompactHeader(
+                        connectionState = backendConnectionState,
+                        onDateClick = {
+                            selectedTab = todayTab
+                            showingCalendar = true
+                        },
+                        onSettingsClick = { showingSettings = true },
+                    )
+                    when {
+                        showingCalendar -> CalendarSurface(
+                            events = shellState.events,
+                            todos = shellState.todos,
+                            onDeleteCommitment = ::deleteCommitment,
+                            onEditCommitment = { target, anchor ->
+                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState()),
+                        )
 
-                selectedTab.destination == TabDestination.Today -> TodayTimeline(
-                    events = shellState.events,
-                    todos = shellState.todos,
-                    onDeleteCommitment = ::deleteCommitment,
-                    modifier = Modifier.weight(1f),
-                )
+                        selectedTab.destination == TabDestination.Today -> TodayTimeline(
+                            events = shellState.events,
+                            todos = shellState.todos,
+                            onDeleteCommitment = ::deleteCommitment,
+                            onEditCommitment = { target, anchor ->
+                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
 
-                selectedTab.destination == TabDestination.Todo -> TodoSurface(
-                    todos = shellState.todos,
-                    onDeleteCommitment = ::deleteCommitment,
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                )
+                        selectedTab.destination == TabDestination.Todo -> TodoSurface(
+                            todos = shellState.todos,
+                            onDeleteCommitment = ::deleteCommitment,
+                            onEditCommitment = { target, anchor ->
+                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState()),
+                        )
 
-                else -> TodayTimeline(
-                    events = shellState.events,
-                    todos = shellState.todos,
-                    onDeleteCommitment = ::deleteCommitment,
-                    modifier = Modifier.weight(1f),
+                        else -> TodayTimeline(
+                            events = shellState.events,
+                            todos = shellState.todos,
+                            onDeleteCommitment = ::deleteCommitment,
+                            onEditCommitment = { target, anchor ->
+                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                activeEditMenu?.let { request ->
+                    RootEditBubbleOverlay(
+                        request = request,
+                        onDismiss = { activeEditMenu = null },
+                        onEdit = {
+                            activeEditMenu = null
+                            activeEditTarget = request.target
+                        },
+                    )
+                }
+                activeEditTarget?.let { target ->
+                    CommitmentEditOverlay(
+                        target = target,
+                        onDismiss = { activeEditTarget = null },
+                        onSave = { proposal ->
+                            activeEditTarget = null
+                            updateCommitment(proposal)
+                        },
+                    )
+                }
+            }
+            if (showingSettings) {
+                ConnectionSettingsOverlay(
+                    settings = connectionSettings,
+                    connectionState = backendConnectionState,
+                    themeMode = themeMode,
+                    userEmail = userEmail.ifBlank { connectionSettings.userEmail },
+                    onThemeModeChanged = onThemeModeChanged,
+                    onTestConnection = ::testBackendConnection,
+                    onSave = { settings ->
+                        onConnectionSettingsSaved(settings)
+                        testBackendConnection(settings)
+                        showingSettings = false
+                    },
+                    onLogout = onLogout,
+                    onClose = { showingSettings = false },
                 )
             }
-        }
-        if (showingSettings) {
-            ConnectionSettingsOverlay(
-                settings = connectionSettings,
-                onSave = { settings ->
-                    onConnectionSettingsSaved(settings)
-                    connectionLabel = "正在连接"
-                    connectionHealthy = true
-                    showingSettings = false
-                },
-                onClose = { showingSettings = false },
-            )
         }
     }
 }
 
 @Composable
 private fun CompactHeader(
-    connectionLabel: String,
-    connectionHealthy: Boolean,
+    connectionState: BackendConnectionState,
     onDateClick: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
@@ -352,8 +649,7 @@ private fun CompactHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             StatusPill(
-                label = connectionLabel,
-                healthy = connectionHealthy,
+                state = connectionState,
             )
             SettingsButton(onClick = onSettingsClick)
         }
@@ -384,17 +680,21 @@ private fun SettingsButton(onClick: () -> Unit) {
 
 @Composable
 private fun StatusPill(
-    label: String,
-    healthy: Boolean,
+    state: BackendConnectionState,
 ) {
-    val color = if (healthy) Success else Danger
-    val background = if (healthy) SuccessSoft else DangerSoft
+    val color = state.indicator.color()
+    val background = when (state.indicator) {
+        ConnectionIndicator.Connected -> SuccessSoft
+        ConnectionIndicator.Failed -> DangerSoft
+        ConnectionIndicator.Checking,
+        ConnectionIndicator.NotConnected -> AccentSoft
+    }
     Surface(
         color = background,
         shape = RoundedCornerShape(999.dp),
     ) {
         Text(
-            text = label,
+            text = state.label,
             color = color,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
@@ -408,27 +708,30 @@ private fun StatusPill(
 @Composable
 private fun ConnectionSettingsOverlay(
     settings: AgentConnectionSettings,
+    connectionState: BackendConnectionState,
+    themeMode: AppThemeMode,
+    userEmail: String,
+    onThemeModeChanged: (AppThemeMode) -> Unit,
+    onTestConnection: (AgentConnectionSettings) -> Unit,
     onSave: (AgentConnectionSettings) -> Unit,
+    onLogout: () -> Unit,
     onClose: () -> Unit,
 ) {
+    var panel by remember { mutableStateOf(SettingsPanel.Root) }
     var baseUrl by remember(settings) { mutableStateOf(settings.baseUrl) }
-    var accessToken by remember(settings) { mutableStateOf(settings.accessToken) }
     var deepseekApiKey by remember(settings) { mutableStateOf(settings.deepseekApiKey) }
     var deepseekBaseUrl by remember(settings) { mutableStateOf(settings.deepseekBaseUrl) }
     var deepseekModel by remember(settings) { mutableStateOf(settings.deepseekModel) }
-    var testRunning by remember { mutableStateOf(false) }
-    var testHealthy by remember { mutableStateOf<Boolean?>(null) }
-    var testLabel by remember { mutableStateOf("") }
-    var testDetail by remember { mutableStateOf("") }
-    var selectedTheme by remember { mutableStateOf("经典浅色") }
-    val testHandler = remember { Handler(Looper.getMainLooper()) }
     val normalizedBaseUrl = baseUrl.trim()
     val urlValid = normalizedBaseUrl.startsWith("http://") || normalizedBaseUrl.startsWith("https://")
-    LaunchedEffect(normalizedBaseUrl, accessToken) {
-        testHealthy = null
-        testLabel = ""
-        testDetail = ""
-    }
+    val settingsToTest = AgentConnectionSettings(
+        baseUrl = normalizedBaseUrl,
+        accessToken = settings.accessToken.trim(),
+        userEmail = userEmail.trim(),
+        deepseekApiKey = deepseekApiKey.trim(),
+        deepseekBaseUrl = deepseekBaseUrl.trim().ifBlank { "https://api.deepseek.com/v1" },
+        deepseekModel = deepseekModel.trim().ifBlank { "deepseek-v4-flash" },
+    )
     Popup(
         alignment = Alignment.Center,
         properties = PopupProperties(
@@ -441,7 +744,7 @@ private fun ConnectionSettingsOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.White.copy(alpha = 0.94f))
+                .background(Canvas.copy(alpha = 0.94f))
                 .padding(horizontal = 22.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -459,218 +762,425 @@ private fun ConnectionSettingsOverlay(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    Text(
-                        text = "设置",
-                        color = Ink,
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    SettingsGroupTitle("连接")
-                    Text(
-                        text = "后端负责 AI 转发和语音授权。测试只检查后端是否可达，不会提交 DeepSeek Key。",
-                        color = Muted,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp,
-                    )
-                    OutlinedTextField(
-                        value = baseUrl,
-                        onValueChange = { baseUrl = it },
-                        label = { Text("后端 URL", fontSize = 12.sp) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = accessToken,
-                        onValueChange = { accessToken = it },
-                        label = { Text("后端访问密钥", fontSize = 12.sp) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = deepseekApiKey,
-                        onValueChange = { deepseekApiKey = it },
-                        label = { Text("DeepSeek API Key", fontSize = 12.sp) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = deepseekBaseUrl,
-                            onValueChange = { deepseekBaseUrl = it },
-                            label = { Text("DeepSeek URL", fontSize = 12.sp) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1.35f),
+                    when (panel) {
+                        SettingsPanel.Root -> SettingsRootMenu(
+                            connectionState = connectionState,
+                            themeMode = themeMode,
+                            userEmail = userEmail,
+                            userBound = userEmail.isNotBlank(),
+                            onUserClick = { panel = SettingsPanel.User },
+                            onConnectionClick = { panel = SettingsPanel.Connection },
+                            onThemeClick = { panel = SettingsPanel.Theme },
+                            onClose = onClose,
                         )
-                        OutlinedTextField(
-                            value = deepseekModel,
-                            onValueChange = { deepseekModel = it },
-                            label = { Text("模型", fontSize = 12.sp) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.weight(1f),
+
+                        SettingsPanel.User -> UserSettingsMenu(
+                            email = userEmail,
+                            onBack = { panel = SettingsPanel.Root },
+                            onLogout = onLogout,
                         )
-                    }
-                    if (!urlValid) {
-                        Text(
-                            text = "URL 需要以 http:// 或 https:// 开头",
-                            color = Danger,
-                            fontSize = 12.sp,
-                        )
-                    }
-                    Button(
-                        onClick = {
-                            testRunning = true
-                            testHealthy = null
-                            testLabel = "正在测试"
-                            testDetail = normalizedBaseUrl
-                            val settingsToTest = AgentConnectionSettings(
-                                baseUrl = normalizedBaseUrl,
-                                accessToken = accessToken.trim(),
-                                deepseekApiKey = deepseekApiKey.trim(),
-                                deepseekBaseUrl = deepseekBaseUrl.trim().ifBlank { "https://api.deepseek.com/v1" },
-                                deepseekModel = deepseekModel.trim().ifBlank { "deepseek-v4-flash" },
-                            )
-                            Thread {
-                                val result = AgentApiClient(settingsToTest.toConfig()).testConnection()
-                                testHandler.post {
-                                    testRunning = false
-                                    testHealthy = result.healthy
-                                    testLabel = result.label
-                                    testDetail = result.detail
-                                }
-                            }.start()
-                        },
-                        enabled = urlValid && !testRunning,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = AccentSoft,
-                            disabledContainerColor = AccentSoft.copy(alpha = 0.52f),
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(50.dp),
-                    ) {
-                        Text(
-                            text = if (testRunning) "测试中..." else "测试连接",
-                            color = Accent,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                    if (testRunning || testHealthy != null) {
-                        val healthy = testHealthy
-                        val statusColor = when (healthy) {
-                            true -> Success
-                            false -> Danger
-                            null -> Accent
-                        }
-                        val statusBackground = when (healthy) {
-                            true -> SuccessSoft
-                            false -> DangerSoft
-                            null -> AccentSoft
-                        }
-                        Surface(
-                            color = statusBackground,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Text(
-                                    text = testLabel,
-                                    color = statusColor,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                if (testDetail.isNotBlank()) {
-                                    Text(
-                                        text = testDetail,
-                                        color = Muted,
-                                        fontSize = 12.sp,
-                                        lineHeight = 16.sp,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    SettingsGroupTitle("外观")
-                    ThemeOptionRow(
-                        name = "经典浅色",
-                        description = "当前主题",
-                        color = Accent,
-                        selected = selectedTheme == "经典浅色",
-                        onClick = { selectedTheme = "经典浅色" },
-                    )
-                    ThemeOptionRow(
-                        name = "深色",
-                        description = "低亮度环境",
-                        color = BottomInk,
-                        selected = selectedTheme == "深色",
-                        onClick = { selectedTheme = "深色" },
-                    )
-                    ThemeOptionRow(
-                        name = "雾蓝",
-                        description = "更冷静的浅色",
-                        color = Color(0xFF5F7E9B),
-                        selected = selectedTheme == "雾蓝",
-                        onClick = { selectedTheme = "雾蓝" },
-                    )
-                    SettingsGroupTitle("关于")
-                    SettingsInfoRow(
-                        label = "版本",
-                        value = BuildConfig.VERSION_NAME,
-                        leadingColor = Ink,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Button(
-                            onClick = onClose,
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
-                        ) {
-                            Text("关闭", color = Accent, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                        Button(
-                            onClick = {
-                                onSave(
-                                    AgentConnectionSettings(
-                                        baseUrl = normalizedBaseUrl,
-                                        accessToken = accessToken.trim(),
-                                        deepseekApiKey = deepseekApiKey.trim(),
-                                        deepseekBaseUrl = deepseekBaseUrl.trim().ifBlank { "https://api.deepseek.com/v1" },
-                                        deepseekModel = deepseekModel.trim().ifBlank { "deepseek-v4-flash" },
-                                    ),
-                                )
+
+                        SettingsPanel.Connection -> ConnectionSettingsMenu(
+                            baseUrl = baseUrl,
+                            onBaseUrlChange = { baseUrl = it },
+                            deepseekApiKey = deepseekApiKey,
+                            onDeepseekApiKeyChange = { deepseekApiKey = it },
+                            deepseekBaseUrl = deepseekBaseUrl,
+                            onDeepseekBaseUrlChange = { deepseekBaseUrl = it },
+                            deepseekModel = deepseekModel,
+                            onDeepseekModelChange = { deepseekModel = it },
+                            urlValid = urlValid,
+                            connectionState = connectionState,
+                            onBack = { panel = SettingsPanel.Root },
+                            onTest = { onTestConnection(settingsToTest) },
+                            onSave = {
+                                onSave(settingsToTest)
                             },
-                            enabled = urlValid,
-                            colors = ButtonDefaults.buttonColors(containerColor = Ink),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
-                        ) {
-                            Text("保存", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                        }
+                        )
+
+                        SettingsPanel.Theme -> ThemeSettingsMenu(
+                            themeMode = themeMode,
+                            onThemeModeChanged = onThemeModeChanged,
+                            onBack = { panel = SettingsPanel.Root },
+                        )
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SettingsRootMenu(
+    connectionState: BackendConnectionState,
+    themeMode: AppThemeMode,
+    userEmail: String,
+    userBound: Boolean,
+    onUserClick: () -> Unit,
+    onConnectionClick: () -> Unit,
+    onThemeClick: () -> Unit,
+    onClose: () -> Unit,
+) {
+    SettingsHeader(title = "设置")
+    SettingsMenuRow(
+        title = "用户",
+        detail = userEmail.ifBlank { "未绑定" },
+        indicator = if (userBound) ConnectionIndicator.Connected else ConnectionIndicator.NotConnected,
+        onClick = onUserClick,
+    )
+    SettingsMenuRow(
+        title = "连接",
+        detail = connectionState.label,
+        indicator = connectionState.indicator,
+        onClick = onConnectionClick,
+    )
+    SettingsMenuRow(
+        title = "主题色",
+        detail = themeMode.label,
+        swatch = themeMode.swatchColor(),
+        onClick = onThemeClick,
+    )
+    SettingsGroupTitle("关于")
+    SettingsInfoRow(
+        label = "版本",
+        value = BuildConfig.VERSION_NAME,
+        leadingColor = Ink,
+    )
+    Button(
+        onClick = onClose,
+        colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+    ) {
+        Text("关闭", color = Accent, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun ConnectionSettingsMenu(
+    baseUrl: String,
+    onBaseUrlChange: (String) -> Unit,
+    deepseekApiKey: String,
+    onDeepseekApiKeyChange: (String) -> Unit,
+    deepseekBaseUrl: String,
+    onDeepseekBaseUrlChange: (String) -> Unit,
+    deepseekModel: String,
+    onDeepseekModelChange: (String) -> Unit,
+    urlValid: Boolean,
+    connectionState: BackendConnectionState,
+    onBack: () -> Unit,
+    onTest: () -> Unit,
+    onSave: () -> Unit,
+) {
+    SettingsHeader(title = "连接", onBack = onBack)
+    Text(
+        text = "后端负责 AI 转发和语音授权。测试只检查后端是否可达，不会提交 DeepSeek Key。",
+        color = Muted,
+        fontSize = 13.sp,
+        lineHeight = 19.sp,
+    )
+    OutlinedTextField(
+        value = baseUrl,
+        onValueChange = onBaseUrlChange,
+        label = { Text("后端 URL", fontSize = 12.sp) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = appTextFieldColors(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = deepseekApiKey,
+        onValueChange = onDeepseekApiKeyChange,
+        label = { Text("DeepSeek API Key", fontSize = 12.sp) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = appTextFieldColors(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = deepseekBaseUrl,
+            onValueChange = onDeepseekBaseUrlChange,
+            label = { Text("DeepSeek URL", fontSize = 12.sp) },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            colors = appTextFieldColors(),
+            modifier = Modifier.weight(1.35f),
+        )
+        OutlinedTextField(
+            value = deepseekModel,
+            onValueChange = onDeepseekModelChange,
+            label = { Text("模型", fontSize = 12.sp) },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            colors = appTextFieldColors(),
+            modifier = Modifier.weight(1f),
+        )
+    }
+    if (!urlValid) {
+        Text(
+            text = "URL 需要以 http:// 或 https:// 开头",
+            color = Danger,
+            fontSize = 12.sp,
+        )
+    }
+    Button(
+        onClick = onTest,
+        enabled = urlValid && connectionState.indicator != ConnectionIndicator.Checking,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = AccentSoft,
+            disabledContainerColor = AccentSoft.copy(alpha = 0.52f),
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(50.dp),
+    ) {
+        Text(
+            text = if (connectionState.indicator == ConnectionIndicator.Checking) "测试中..." else "测试连接",
+            color = Accent,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+    ConnectionTestResult(connectionState = connectionState)
+    Button(
+        onClick = onSave,
+        enabled = urlValid,
+        colors = ButtonDefaults.buttonColors(containerColor = Ink),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+    ) {
+        Text("保存", color = readableOn(Ink), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun UserSettingsMenu(
+    email: String,
+    onBack: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    SettingsHeader(title = "用户", onBack = onBack)
+    Text(
+        text = "当前邮箱",
+        color = Muted,
+        fontSize = 13.sp,
+        lineHeight = 19.sp,
+    )
+    SettingsInfoRow(
+        label = "邮箱",
+        value = email.ifBlank { "未登录" },
+        leadingColor = Success,
+    )
+    Button(
+        onClick = onLogout,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = DangerSoft,
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+    ) {
+        Text(
+            text = "退出登录",
+            color = Danger,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun ThemeSettingsMenu(
+    themeMode: AppThemeMode,
+    onThemeModeChanged: (AppThemeMode) -> Unit,
+    onBack: () -> Unit,
+) {
+    SettingsHeader(title = "主题色", onBack = onBack)
+    ThemeOptionRow(
+        name = AppThemeMode.ClassicLight.label,
+        description = AppThemeMode.ClassicLight.description,
+        color = AppThemeMode.ClassicLight.swatchColor(),
+        selected = themeMode == AppThemeMode.ClassicLight,
+        onClick = { onThemeModeChanged(AppThemeMode.ClassicLight) },
+    )
+    ThemeOptionRow(
+        name = AppThemeMode.Dark.label,
+        description = AppThemeMode.Dark.description,
+        color = AppThemeMode.Dark.swatchColor(),
+        selected = themeMode == AppThemeMode.Dark,
+        onClick = { onThemeModeChanged(AppThemeMode.Dark) },
+    )
+    ThemeOptionRow(
+        name = AppThemeMode.FogBlue.label,
+        description = AppThemeMode.FogBlue.description,
+        color = AppThemeMode.FogBlue.swatchColor(),
+        selected = themeMode == AppThemeMode.FogBlue,
+        onClick = { onThemeModeChanged(AppThemeMode.FogBlue) },
+    )
+}
+
+@Composable
+private fun SettingsHeader(
+    title: String,
+    onBack: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            Surface(
+                color = AccentSoft,
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier
+                    .size(36.dp)
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { onBack() })
+                    },
+            ) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                    Text(text = "‹", color = Accent, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        Text(
+            text = title,
+            color = Ink,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun SettingsMenuRow(
+    title: String,
+    detail: String,
+    onClick: () -> Unit,
+    indicator: ConnectionIndicator? = null,
+    swatch: Color? = null,
+) {
+    Surface(
+        color = AccentSoft.copy(alpha = 0.42f),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(18.dp))
+            .pointerInput(title) {
+                detectTapGestures(onTap = { onClick() })
+            },
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 15.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            when {
+                indicator != null -> ConnectionStatusDot(indicator)
+                swatch != null -> Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .background(swatch, RoundedCornerShape(999.dp)),
+                )
+            }
+            Text(
+                text = title,
+                color = Ink,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = detail,
+                color = Muted,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(text = "›", color = Muted, fontSize = 22.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun ConnectionStatusDot(indicator: ConnectionIndicator) {
+    Box(
+        modifier = Modifier
+            .size(12.dp)
+            .background(indicator.color(), RoundedCornerShape(999.dp)),
+    )
+}
+
+@Composable
+private fun ConnectionTestResult(
+    connectionState: BackendConnectionState,
+) {
+    val statusColor = connectionState.indicator.color()
+    val statusBackground = when (connectionState.indicator) {
+        ConnectionIndicator.Connected -> SuccessSoft
+        ConnectionIndicator.Failed -> DangerSoft
+        ConnectionIndicator.Checking,
+        ConnectionIndicator.NotConnected -> AccentSoft
+    }
+    Surface(
+        color = statusBackground,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = connectionState.label,
+                color = statusColor,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (connectionState.detail.isNotBlank()) {
+                Text(
+                    text = connectionState.detail,
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionIndicator.color(): Color = when (this) {
+    ConnectionIndicator.Checking -> Accent
+    ConnectionIndicator.Connected -> Success
+    ConnectionIndicator.NotConnected -> BottomMuted
+    ConnectionIndicator.Failed -> Danger
+}
+
+private fun ConnectionIndicator.label(): String = when (this) {
+    ConnectionIndicator.Checking -> "连接中"
+    ConnectionIndicator.Connected -> "已连接"
+    ConnectionIndicator.NotConnected -> "未连接"
+    ConnectionIndicator.Failed -> "连接失败"
+}
+
+private fun AppThemeMode.swatchColor(): Color = when (this) {
+    AppThemeMode.ClassicLight -> Color(0xFF2F7D8C)
+    AppThemeMode.Dark -> Color(0xFF000000)
+    AppThemeMode.FogBlue -> Color(0xFF5F7E9B)
 }
 
 @Composable
@@ -699,7 +1209,7 @@ private fun ThemeOptionRow(
             .fillMaxWidth()
             .border(
                 width = 1.dp,
-                color = if (selected) Color(0xFFD0E4E8) else Divider,
+                color = if (selected) Accent else Divider,
                 shape = RoundedCornerShape(16.dp),
             )
             .pointerInput(name) {
@@ -744,7 +1254,7 @@ private fun SettingsInfoRow(
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, Color(0xFFD9E8EB), RoundedCornerShape(16.dp)),
+            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -780,6 +1290,7 @@ private fun TodayTimeline(
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    onEditCommitment: CommitmentEditRequester,
     modifier: Modifier = Modifier,
 ) {
     val today = LocalDate.now()
@@ -800,11 +1311,13 @@ private fun TodayTimeline(
             todayEvents = todayEvents,
             upcomingEvents = upcomingEvents,
             onDeleteCommitment = onDeleteCommitment,
+            onEditCommitment = onEditCommitment,
             modifier = Modifier.weight(1f),
         )
         HomeTodoTimelineSection(
             todos = homeTodos,
             onDeleteCommitment = onDeleteCommitment,
+            onEditCommitment = onEditCommitment,
             modifier = Modifier.weight(1f),
         )
     }
@@ -815,6 +1328,7 @@ private fun HomeScheduleSection(
     todayEvents: List<ScheduleEvent>,
     upcomingEvents: List<ScheduleEvent>,
     onDeleteCommitment: (String) -> Unit,
+    onEditCommitment: CommitmentEditRequester,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -846,6 +1360,7 @@ private fun HomeScheduleSection(
                             event = event,
                             showConnector = index != todayEvents.lastIndex,
                             onDelete = { onDeleteCommitment(event.id) },
+                            onEdit = onEditCommitment,
                         )
                     }
                 }
@@ -861,6 +1376,7 @@ private fun HomeScheduleSection(
                         UpcomingEventRow(
                             event = event,
                             onDelete = { onDeleteCommitment(event.id) },
+                            onEdit = onEditCommitment,
                         )
                     }
                 }
@@ -873,6 +1389,7 @@ private fun HomeScheduleSection(
 private fun HomeTodoTimelineSection(
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    onEditCommitment: CommitmentEditRequester,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -889,7 +1406,7 @@ private fun HomeTodoTimelineSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .border(1.dp, Color(0xFFD9E8EB), RoundedCornerShape(18.dp)),
+                .border(1.dp, Divider, RoundedCornerShape(18.dp)),
         ) {
             Column(
                 modifier = Modifier
@@ -904,6 +1421,7 @@ private fun HomeTodoTimelineSection(
                             todo = todo,
                             showConnector = index != todos.lastIndex,
                             onDelete = { onDeleteCommitment(todo.id) },
+                            onEdit = onEditCommitment,
                         )
                     }
                 }
@@ -971,11 +1489,15 @@ private fun TimelineEventRow(
     event: ScheduleEvent,
     showConnector: Boolean,
     onDelete: () -> Unit,
+    onEdit: CommitmentEditRequester,
 ) {
     var confirmingDelete by remember(event.id) { mutableStateOf(false) }
+    var expanded by remember(event.id, event.detail) { mutableStateOf(false) }
+    val hasNote = event.detail.isNotBlank()
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize(animationSpec = tween(durationMillis = 240))
             .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -999,38 +1521,52 @@ private fun TimelineEventRow(
                     .background(Divider, RoundedCornerShape(999.dp)),
             )
         }
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .commitmentLongPressMenu(
+                    target = event.editTargetOrNull(),
+                    onEdit = onEdit,
+                    onTap = { if (hasNote) expanded = !expanded },
+                ),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Text(
-                text = event.timeRange,
-                color = Muted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.width(88.dp),
-            )
-            Text(
-                text = event.title,
-                color = Ink,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            if (event.id.isNotBlank()) {
-                ConfirmableMiniDeleteButton(
-                    confirming = confirmingDelete,
-                    onRequestConfirm = { confirmingDelete = true },
-                    onConfirm = {
-                        confirmingDelete = false
-                        onDelete()
-                    },
-                    onCancel = { confirmingDelete = false },
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = event.timeRange,
+                    color = Muted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.width(88.dp),
                 )
+                Text(
+                    text = event.title,
+                    color = Ink,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (hasNote) {
+                    Text(text = if (expanded) "收起" else "备注", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
             }
+            ExpandableNoteText(note = event.detail, expanded = expanded)
+        }
+        if (event.id.isNotBlank()) {
+            ConfirmableMiniDeleteButton(
+                confirming = confirmingDelete,
+                onRequestConfirm = { confirmingDelete = true },
+                onConfirm = {
+                    confirmingDelete = false
+                    onDelete()
+                },
+                onCancel = { confirmingDelete = false },
+            )
         }
     }
 }
@@ -1040,11 +1576,15 @@ private fun HomeTodoTimelineRow(
     todo: TodoItem,
     showConnector: Boolean,
     onDelete: () -> Unit,
+    onEdit: CommitmentEditRequester,
 ) {
     val color = todo.priority.color()
+    var expanded by remember(todo.stableUiKey(), todo.detail) { mutableStateOf(false) }
+    val hasNote = todo.detail.isNotBlank()
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize(animationSpec = tween(durationMillis = 240))
             .padding(horizontal = 12.dp, vertical = 5.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1078,27 +1618,36 @@ private fun HomeTodoTimelineRow(
             modifier = Modifier.width(52.dp),
         )
         Column(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .commitmentLongPressMenu(
+                    target = todo.editTargetOrNull(),
+                    onEdit = onEdit,
+                    onTap = { if (hasNote) expanded = !expanded },
+                ),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(
-                text = todo.title,
-                color = Ink,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (todo.detail.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = todo.detail,
-                    color = Muted,
-                    fontSize = 12.sp,
-                    lineHeight = 15.sp,
+                    text = todo.title,
+                    color = Ink,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                if (hasNote) {
+                    Text(text = if (expanded) "收起" else "备注", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
             }
+            ExpandableNoteText(
+                note = todo.detail,
+                expanded = expanded,
+                collapsedMaxLines = 1,
+                fontSize = 12,
+                lineHeight = 15,
+            )
         }
         if (todo.id.isNotBlank()) {
             MiniDeleteButton(onClick = onDelete)
@@ -1107,14 +1656,377 @@ private fun HomeTodoTimelineRow(
 }
 
 @Composable
+private fun InlineScheduleEditor(
+    title: String,
+    date: String,
+    startTime: String,
+    endTime: String,
+    notes: String,
+    onTitleChange: (String) -> Unit,
+    onDateChange: (String) -> Unit,
+    onStartTimeChange: (String) -> Unit,
+    onEndTimeChange: (String) -> Unit,
+    onNotesChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.animateContentSize(animationSpec = tween(durationMillis = 220)),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CompactEditField(value = title, onValueChange = onTitleChange, label = "标题")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CompactEditField(value = date, onValueChange = onDateChange, label = "日期", modifier = Modifier.weight(1.25f))
+            CompactEditField(value = startTime, onValueChange = onStartTimeChange, label = "开始", modifier = Modifier.weight(1f))
+            CompactEditField(value = endTime, onValueChange = onEndTimeChange, label = "结束", modifier = Modifier.weight(1f))
+        }
+        CompactEditField(value = notes, onValueChange = onNotesChange, label = "备注", singleLine = false)
+        InlineEditActions(onSave = onSave, onCancel = onCancel)
+    }
+}
+
+@Composable
+private fun InlineTodoEditor(
+    title: String,
+    due: String,
+    notes: String,
+    priority: String,
+    onTitleChange: (String) -> Unit,
+    onDueChange: (String) -> Unit,
+    onNotesChange: (String) -> Unit,
+    onPriorityChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.animateContentSize(animationSpec = tween(durationMillis = 220)),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CompactEditField(value = title, onValueChange = onTitleChange, label = "标题")
+        CompactEditField(value = due, onValueChange = onDueChange, label = "截止")
+        PriorityPicker(priority = priority, onPriorityChange = onPriorityChange)
+        CompactEditField(value = notes, onValueChange = onNotesChange, label = "备注", singleLine = false)
+        InlineEditActions(onSave = onSave, onCancel = onCancel)
+    }
+}
+
+@Composable
+private fun PriorityPicker(
+    priority: String,
+    onPriorityChange: (String) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("high" to "高", "medium" to "中", "low" to "低").forEach { (value, label) ->
+            val selected = priority == value
+            val color = value.priorityColor()
+            Surface(
+                color = if (selected) color else Panel,
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier
+                    .border(1.dp, if (selected) color else Divider, RoundedCornerShape(999.dp))
+                    .pointerInput(value) {
+                        detectTapGestures(onTap = { onPriorityChange(value) })
+                    },
+            ) {
+                Text(
+                    text = label,
+                    color = if (selected) readableOn(color) else Muted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineEditActions(
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            color = Panel,
+            shape = RoundedCornerShape(999.dp),
+            modifier = Modifier
+                .border(1.dp, Divider, RoundedCornerShape(999.dp))
+                .pointerInput(Unit) { detectTapGestures(onTap = { onCancel() }) },
+        ) {
+            Text(
+                text = "取消",
+                color = Muted,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        }
+        Surface(
+            color = Ink,
+            shape = RoundedCornerShape(999.dp),
+            modifier = Modifier.pointerInput(Unit) { detectTapGestures(onTap = { onSave() }) },
+        ) {
+            Text(
+                text = "完成",
+                color = readableOn(Ink),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditDecisionBubble(
+    onEdit: () -> Unit,
+) {
+    Surface(
+        color = Color.White,
+        shape = RoundedCornerShape(999.dp),
+        shadowElevation = 0.dp,
+        modifier = Modifier
+            .border(1.dp, Color(0xFFE5E5EA), RoundedCornerShape(999.dp)),
+    ) {
+        Text(
+            text = "编辑",
+            color = Color.Black,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { onEdit() })
+                }
+                .padding(horizontal = 18.dp, vertical = 9.dp),
+        )
+    }
+}
+
+@Composable
+private fun RootEditBubbleOverlay(
+    request: CommitmentEditMenuRequest,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+) {
+    Popup(
+        alignment = Alignment.TopStart,
+        offset = IntOffset(
+            x = (request.anchor.x.roundToInt() - 20).coerceAtLeast(8),
+            y = (request.anchor.y.roundToInt() - 54).coerceAtLeast(8),
+        ),
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(
+            focusable = true,
+            dismissOnClickOutside = true,
+        ),
+    ) {
+        EditDecisionBubble(onEdit = onEdit)
+    }
+}
+
+@Composable
+private fun CommitmentEditOverlay(
+    target: CommitmentEditTarget,
+    onDismiss: () -> Unit,
+    onSave: (AgentProposal) -> Unit,
+) {
+    var entered by remember(target) { mutableStateOf(false) }
+    LaunchedEffect(target) { entered = true }
+    val cardScale by animateFloatAsState(
+        targetValue = if (entered) 1f else 0.96f,
+        animationSpec = spring(dampingRatio = 0.84f, stiffness = 520f),
+        label = "edit-overlay-scale",
+    )
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (entered) 0.34f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "edit-overlay-scrim",
+    )
+    val cardAlpha by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = tween(durationMillis = 160),
+        label = "edit-overlay-alpha",
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = scrimAlpha))
+            .pointerInput(target) {
+                detectTapGestures(onTap = { onDismiss() })
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = Panel.copy(alpha = 0.96f),
+            shape = RoundedCornerShape(30.dp),
+            shadowElevation = 28.dp,
+            modifier = Modifier
+                .padding(horizontal = 18.dp)
+                .fillMaxWidth()
+                .graphicsLayer {
+                    alpha = cardAlpha
+                    scaleX = cardScale
+                    scaleY = cardScale
+                }
+                .border(1.dp, Divider.copy(alpha = 0.78f), RoundedCornerShape(30.dp))
+                .pointerInput(target) {
+                    detectTapGestures(onTap = { })
+                },
+        ) {
+            when (target) {
+                is CommitmentEditTarget.Schedule -> ScheduleEditCard(
+                    event = target.event,
+                    onDismiss = onDismiss,
+                    onSave = onSave,
+                )
+                is CommitmentEditTarget.Todo -> TodoEditCard(
+                    todo = target.todo,
+                    onDismiss = onDismiss,
+                    onSave = onSave,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleEditCard(
+    event: ScheduleEvent,
+    onDismiss: () -> Unit,
+    onSave: (AgentProposal) -> Unit,
+) {
+    val originalDate = event.date.ifBlank { LocalDate.now().toString() }
+    val originalStart = event.timeRange.substringBefore(" - ").ifBlank { "09:00" }
+    val originalEnd = event.timeRange.substringAfter(" - ", "").ifBlank { "10:00" }
+    var title by remember(event.id, event.title) { mutableStateOf(event.title) }
+    var date by remember(event.id, event.date) { mutableStateOf(originalDate) }
+    var startTime by remember(event.id, event.timeRange) { mutableStateOf(originalStart) }
+    var endTime by remember(event.id, event.timeRange) { mutableStateOf(originalEnd) }
+    var notes by remember(event.id, event.detail) { mutableStateOf(event.detail) }
+    Column(
+        modifier = Modifier.padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        EditCardHeader(title = "编辑日程", subtitle = event.title)
+        InlineScheduleEditor(
+            title = title,
+            date = date,
+            startTime = startTime,
+            endTime = endTime,
+            notes = notes,
+            onTitleChange = { title = it },
+            onDateChange = { date = it },
+            onStartTimeChange = { startTime = it },
+            onEndTimeChange = { endTime = it },
+            onNotesChange = { notes = it },
+            onSave = { onSave(event.toScheduleUpdateProposal(title, date, startTime, endTime, notes)) },
+            onCancel = onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun TodoEditCard(
+    todo: TodoItem,
+    onDismiss: () -> Unit,
+    onSave: (AgentProposal) -> Unit,
+) {
+    var title by remember(todo.stableUiKey(), todo.title) { mutableStateOf(todo.title) }
+    var due by remember(todo.stableUiKey(), todo.dueDate) { mutableStateOf(todo.dueDate) }
+    var notes by remember(todo.stableUiKey(), todo.detail) { mutableStateOf(todo.detail) }
+    var priority by remember(todo.stableUiKey(), todo.priority) { mutableStateOf(todo.priority.backendValue()) }
+    Column(
+        modifier = Modifier.padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        EditCardHeader(title = "编辑待办", subtitle = todo.title)
+        InlineTodoEditor(
+            title = title,
+            due = due,
+            notes = notes,
+            priority = priority,
+            onTitleChange = { title = it },
+            onDueChange = { due = it },
+            onNotesChange = { notes = it },
+            onPriorityChange = { priority = it },
+            onSave = { onSave(todo.toTodoUpdateProposal(title, due, notes, priority)) },
+            onCancel = onDismiss,
+        )
+    }
+}
+
+@Composable
+private fun EditCardHeader(
+    title: String,
+    subtitle: String,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                text = title,
+                color = Ink,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 28.sp,
+            )
+            Text(
+                text = subtitle,
+                color = Muted,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ExpandableNoteText(
+    note: String,
+    expanded: Boolean,
+    collapsedMaxLines: Int = 0,
+    fontSize: Int = 13,
+    lineHeight: Int = 19,
+) {
+    if (note.isBlank()) {
+        return
+    }
+    if (!expanded && collapsedMaxLines == 0) {
+        return
+    }
+    Text(
+        text = note,
+        color = Muted,
+        fontSize = fontSize.sp,
+        lineHeight = lineHeight.sp,
+        maxLines = if (expanded) Int.MAX_VALUE else collapsedMaxLines,
+        overflow = if (expanded) TextOverflow.Clip else TextOverflow.Ellipsis,
+    )
+}
+
+@Composable
 private fun UpcomingEventRow(
     event: ScheduleEvent,
     onDelete: () -> Unit,
+    onEdit: CommitmentEditRequester,
 ) {
     var confirmingDelete by remember(event.id) { mutableStateOf(false) }
+    var expanded by remember(event.id, event.detail) { mutableStateOf(false) }
+    val hasNote = event.detail.isNotBlank()
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize(animationSpec = tween(durationMillis = 240))
             .padding(horizontal = 14.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1132,15 +2044,32 @@ private fun UpcomingEventRow(
             fontSize = 12.sp,
             modifier = Modifier.width(44.dp),
         )
-        Text(
-            text = event.title,
-            color = Ink,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .commitmentLongPressMenu(
+                    target = event.editTargetOrNull(),
+                    onEdit = onEdit,
+                    onTap = { if (hasNote) expanded = !expanded },
+                ),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = event.title,
+                    color = Ink,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (hasNote) {
+                    Text(text = if (expanded) "收起" else "备注", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+            ExpandableNoteText(note = event.detail, expanded = expanded)
+        }
         if (event.id.isNotBlank()) {
             ConfirmableMiniDeleteButton(
                 confirming = confirmingDelete,
@@ -1154,12 +2083,12 @@ private fun UpcomingEventRow(
         }
     }
 }
-
 @Composable
 private fun CalendarSurface(
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    onEditCommitment: CommitmentEditRequester,
     modifier: Modifier = Modifier,
 ) {
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
@@ -1205,12 +2134,14 @@ private fun CalendarSurface(
                 EventCard(
                     event = event,
                     onDelete = { onDeleteCommitment(event.id) },
+                    onEdit = onEditCommitment,
                 )
             }
             selectedTodos.forEach { todo ->
                 TodoCard(
                     todo = todo,
                     onDelete = { onDeleteCommitment(todo.id) },
+                    onEdit = onEditCommitment,
                 )
             }
         }
@@ -1356,7 +2287,7 @@ private fun CalendarDayCell(
                     Surface(color = loadColor, shape = RoundedCornerShape(999.dp)) {
                         Text(
                             text = if (hasDdl) "!" else eventCount.toString(),
-                            color = Color.White,
+                            color = readableOn(loadColor),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
@@ -1381,6 +2312,7 @@ private fun CalendarDayCell(
 private fun TodoSurface(
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
+    onEditCommitment: CommitmentEditRequester,
     modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
@@ -1407,22 +2339,45 @@ private fun TodoSurface(
                 detail = if (normalizedQuery.isBlank()) "" else normalizedQuery,
             )
         } else {
-            active.forEach { todo ->
-                TodoCard(
-                    todo = todo,
-                    onDelete = { onDeleteCommitment(todo.id) },
-                )
-            }
-            if (done.isNotEmpty()) {
+            Column(
+                modifier = Modifier.animateContentSize(
+                    animationSpec = tween(durationMillis = 220),
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                active.forEach { todo ->
+                    key(todo.stableUiKey()) {
+                        TodoCard(
+                            todo = todo,
+                            onDelete = { onDeleteCommitment(todo.id) },
+                            onEdit = onEditCommitment,
+                        )
+                    }
+                }
                 done.forEach { todo ->
-                    TodoCard(
-                        todo = todo,
-                        onDelete = { onDeleteCommitment(todo.id) },
-                    )
+                    key(todo.stableUiKey()) {
+                        TodoCard(
+                            todo = todo,
+                            onDelete = { onDeleteCommitment(todo.id) },
+                            onEdit = onEditCommitment,
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+private fun TodoItem.stableUiKey(): String {
+    return id.ifBlank { "${title}:${dueDate}:${detail}" }
+}
+
+private fun ScheduleEvent.editTargetOrNull(): CommitmentEditTarget.Schedule? {
+    return id.takeIf { it.isNotBlank() }?.let { CommitmentEditTarget.Schedule(this) }
+}
+
+private fun TodoItem.editTargetOrNull(): CommitmentEditTarget.Todo? {
+    return id.takeIf { it.isNotBlank() }?.let { CommitmentEditTarget.Todo(this) }
 }
 
 @Composable
@@ -1436,6 +2391,7 @@ private fun TodoSearchField(
         label = { Text("搜索待办", fontSize = 12.sp) },
         singleLine = true,
         shape = RoundedCornerShape(16.dp),
+        colors = appTextFieldColors(),
         modifier = Modifier
             .fillMaxWidth()
             .height(58.dp),
@@ -1446,16 +2402,26 @@ private fun TodoSearchField(
 private fun EventCard(
     event: ScheduleEvent,
     onDelete: () -> Unit,
+    onEdit: CommitmentEditRequester,
 ) {
+    var expanded by remember(event.id, event.detail) { mutableStateOf(false) }
+    val hasNote = event.detail.isNotBlank()
     Surface(
         color = Panel,
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize(animationSpec = tween(durationMillis = 240))
             .border(1.dp, Divider, RoundedCornerShape(16.dp)),
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier
+                .padding(14.dp)
+                .commitmentLongPressMenu(
+                    target = event.editTargetOrNull(),
+                    onEdit = onEdit,
+                    onTap = { if (hasNote) expanded = !expanded },
+                ),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Box(
@@ -1469,8 +2435,21 @@ private fun EventCard(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(text = event.timeRange, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                Text(text = event.title, color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text(text = event.detail, color = InkSoft, fontSize = 13.sp, lineHeight = 18.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = event.title,
+                        color = Ink,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (hasNote) {
+                        Text(text = if (expanded) "收起" else "备注", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+                ExpandableNoteText(note = event.detail, expanded = expanded, collapsedMaxLines = 1, fontSize = 13, lineHeight = 18)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1484,26 +2463,31 @@ private fun EventCard(
         }
     }
 }
-
 @Composable
 private fun TodoCard(
     todo: TodoItem,
     onDelete: () -> Unit,
+    onEdit: CommitmentEditRequester,
 ) {
     val color = if (todo.done) Success else todo.priority.color()
     val density = LocalDensity.current
     val revealWidthPx = with(density) { 88.dp.toPx() }
-    var targetOffsetX by remember { mutableStateOf(0f) }
+    var targetOffsetX by remember(todo.stableUiKey()) { mutableStateOf(0f) }
+    var expanded by remember(todo.stableUiKey(), todo.detail) { mutableStateOf(false) }
+    val hasNote = todo.detail.isNotBlank()
     val animatedOffsetX by animateFloatAsState(
         targetValue = targetOffsetX,
         animationSpec = spring(dampingRatio = 0.82f, stiffness = 520f),
         label = "todo-swipe-offset",
     )
-    val revealDelete = animatedOffsetX < -1f
+    val revealProgress = (-animatedOffsetX / revealWidthPx).coerceIn(0f, 1f)
+    val revealDelete = revealProgress > 0.01f
+    val deleteSlideOffsetX = with(density) { (24.dp.toPx() * (1f - revealProgress)).roundToInt() }
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(78.dp),
+            .heightIn(min = 78.dp)
+            .animateContentSize(animationSpec = tween(durationMillis = 240)),
     ) {
         if (revealDelete) {
             Surface(
@@ -1513,12 +2497,14 @@ private fun TodoCard(
                     .align(Alignment.CenterEnd)
                     .height(68.dp)
                     .width(88.dp)
+                    .offset { androidx.compose.ui.unit.IntOffset(deleteSlideOffsetX, 0) }
+                    .graphicsLayer { alpha = revealProgress }
                     .pointerInput(Unit) {
                         detectTapGestures(onTap = { onDelete() })
                     },
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Text(text = "删除", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(text = "删除", color = readableOn(Danger), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -1526,8 +2512,9 @@ private fun TodoCard(
             color = Panel,
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier
+                .align(Alignment.CenterStart)
                 .fillMaxWidth()
-                .height(68.dp)
+                .heightIn(min = 68.dp)
                 .offset { androidx.compose.ui.unit.IntOffset(animatedOffsetX.roundToInt(), 0) }
                 .border(1.dp, Divider, RoundedCornerShape(14.dp))
                 .pointerInput(Unit) {
@@ -1546,7 +2533,14 @@ private fun TodoCard(
                 },
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .commitmentLongPressMenu(
+                        target = todo.editTargetOrNull(),
+                        onEdit = onEdit,
+                        onTap = { if (hasNote) expanded = !expanded },
+                        onBeforeEdit = { targetOffsetX = 0f },
+                    ),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1580,14 +2574,20 @@ private fun TodoCard(
                             fontWeight = FontWeight.Medium,
                         )
                     }
-                    Text(
-                        text = todo.detail,
-                        color = InkSoft,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            ExpandableNoteText(
+                                note = todo.detail,
+                                expanded = expanded,
+                                collapsedMaxLines = 1,
+                                fontSize = 12,
+                                lineHeight = 16,
+                            )
+                        }
+                        if (hasNote) {
+                            Text(text = if (expanded) "收起" else "备注", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
                 }
             }
         }
@@ -1656,7 +2656,7 @@ private fun ConfirmableMiniDeleteButton(
         ) {
             Text(
                 text = "删除",
-                color = Color.White,
+                color = readableOn(Danger),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
@@ -1778,6 +2778,11 @@ private fun VoiceAgentDock(
             status = "没有识别到内容"
             return
         }
+        if (connectionSettings.accessToken.isBlank() || connectionSettings.userEmail.isBlank()) {
+            phase = ComposerPhase.Error
+            status = "请先在设置里绑定邮箱"
+            return
+        }
         submittedText = prompt
         proposal = null
         val client = agentApiClient
@@ -1872,10 +2877,19 @@ private fun VoiceAgentDock(
             selectedTab = selectedTab,
             onTodaySelected = onTodaySelected,
             onTodoSelected = onTodoSelected,
-            voiceEnabled = asrClient != null && phase != ComposerPhase.Working && phase != ComposerPhase.Confirming,
+            voiceEnabled = asrClient != null &&
+                connectionSettings.accessToken.isNotBlank() &&
+                connectionSettings.userEmail.isNotBlank() &&
+                phase != ComposerPhase.Working &&
+                phase != ComposerPhase.Confirming,
             listening = isListening,
             cancelArmed = voiceCancelArmed,
             onPressStart = {
+                if (connectionSettings.accessToken.isBlank() || connectionSettings.userEmail.isBlank()) {
+                    status = "请先在设置里绑定邮箱"
+                    phase = ComposerPhase.Error
+                    return@BottomVoiceNav
+                }
                 val client = asrClient
                 if (client == null) {
                     status = "语音暂不可用"
@@ -1983,7 +2997,7 @@ private fun VoiceInteractionOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.White.copy(alpha = 0.92f))
+                .background(Canvas.copy(alpha = 0.92f))
                 .padding(horizontal = 24.dp, vertical = 64.dp),
         ) {
             if (canCancelVoice) {
@@ -2021,6 +3035,7 @@ private fun VoiceInteractionOverlay(
                     ProposalPresentation.CandidateChoice -> CandidateChoiceList(
                         candidates = proposal.candidates,
                         onCandidateSelected = onCandidateSelected,
+                        onClose = onCancel,
                     )
 
                     ProposalPresentation.Confirmable -> ProposalReviewPanel(
@@ -2043,7 +3058,7 @@ private fun VoiceInteractionOverlay(
                             colors = ButtonDefaults.buttonColors(containerColor = InkSoft),
                             shape = RoundedCornerShape(999.dp),
                         ) {
-                            Text("关闭")
+                            Text("关闭", color = readableOn(InkSoft))
                         }
                     }
                 }
@@ -2109,15 +3124,22 @@ private fun VoiceOverlayCopy(
 private fun CandidateChoiceList(
     candidates: List<AgentProposalCandidate>,
     onCandidateSelected: (AgentProposalCandidate) -> Unit,
+    onClose: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        candidates.take(5).forEach { candidate ->
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            TextAction(text = "关闭", onClick = onClose)
+        }
+        candidates.take(8).forEach { candidate ->
             Surface(
-                color = Color.White.copy(alpha = 0.72f),
+                color = Panel.copy(alpha = 0.72f),
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2156,7 +3178,12 @@ private fun CandidateChoiceList(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Text(text = "选择", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = candidate.actionLabel,
+                        color = if (candidate.actionLabel == "删除") Danger else Accent,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
         }
@@ -2175,7 +3202,7 @@ private fun ProposalReviewPanel(
     val editedProposal = draft.toProposal(proposal)
     val edited = draft != originalDraft
     Surface(
-        color = Color.White.copy(alpha = 0.92f),
+        color = Panel.copy(alpha = 0.92f),
         shape = RoundedCornerShape(28.dp),
         shadowElevation = 18.dp,
         modifier = Modifier
@@ -2207,7 +3234,7 @@ private fun ProposalReviewPanel(
                     .fillMaxWidth()
                     .height(54.dp),
             ) {
-                Text("确认", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("确认", color = readableOn(Accent), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2245,13 +3272,13 @@ private fun ProposalReadOnlySummary(proposal: AgentProposal) {
                 fontWeight = FontWeight.Medium,
             )
             if (patch.notes.isNotBlank()) {
-                Text(text = patch.notes, color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(text = patch.notes, color = Muted, fontSize = 14.sp, lineHeight = 20.sp)
             }
         }
         proposal.todoPatch?.let { patch ->
-            Text(text = patch.due, color = InkSoft, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Text(text = "截止 ${patch.due}", color = InkSoft, fontSize = 17.sp, fontWeight = FontWeight.Medium)
             if (patch.notes.isNotBlank()) {
-                Text(text = patch.notes, color = Muted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(text = patch.notes, color = Muted, fontSize = 14.sp, lineHeight = 20.sp)
             }
         }
         if (proposal.schedulePatch == null && proposal.todoPatch == null) {
@@ -2271,7 +3298,7 @@ private fun ProposalResultPanel(
     onClose: () -> Unit,
 ) {
     Surface(
-        color = Color.White.copy(alpha = 0.92f),
+        color = Panel.copy(alpha = 0.92f),
         shape = RoundedCornerShape(28.dp),
         shadowElevation = 18.dp,
         modifier = Modifier
@@ -2303,7 +3330,7 @@ private fun ProposalResultPanel(
                     .fillMaxWidth()
                     .height(52.dp),
             ) {
-                Text("关闭", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text("关闭", color = readableOn(Ink), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -2370,17 +3397,33 @@ private fun CompactEditField(
     value: String,
     onValueChange: (String) -> Unit,
     label: String,
+    singleLine: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label, fontSize = 12.sp) },
-        singleLine = true,
+        singleLine = singleLine,
+        minLines = if (singleLine) 1 else 2,
         shape = RoundedCornerShape(14.dp),
+        colors = appTextFieldColors(),
         modifier = modifier.fillMaxWidth(),
     )
 }
+
+@Composable
+private fun appTextFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = Ink,
+    unfocusedTextColor = Ink,
+    focusedLabelColor = Accent,
+    unfocusedLabelColor = Muted,
+    focusedBorderColor = Accent,
+    unfocusedBorderColor = Divider,
+    cursorColor = Accent,
+    focusedContainerColor = Panel,
+    unfocusedContainerColor = Panel,
+)
 
 @Composable
 private fun TextAction(
@@ -2422,7 +3465,7 @@ private fun CallActionButton(
                 },
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                Text(text = symbol, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = symbol, color = readableOn(color), fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
             }
         }
         Text(text = label, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -2592,7 +3635,7 @@ private fun BottomVoiceNav(
         modifier = Modifier
             .fillMaxWidth()
             .height(98.dp)
-            .background(Color.White)
+            .background(BottomBar)
             .padding(horizontal = 18.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -2740,7 +3783,7 @@ private fun VoiceCancelZone(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        color = if (armed) DangerSoft else Color(0xFFF7F7F8),
+        color = if (armed) DangerSoft else AccentSoft,
         shape = RoundedCornerShape(999.dp),
         modifier = modifier.border(
             width = 1.dp,
@@ -2827,15 +3870,16 @@ private fun VoicePrimaryButton(
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 if (listening) {
-                    MiniWaveform(color = Color.White)
+                    MiniWaveform(color = VoiceGlyph)
                 } else {
-                    MicGlyph(color = if (enabled) Color.White else BottomMuted)
+                    MicGlyph(color = if (enabled) VoiceGlyph else VoiceDisabledGlyph)
                 }
             }
         }
     }
 }
 
+@Composable
 private fun ScheduleRisk.color(): Color {
     return when (this) {
         ScheduleRisk.Normal -> Success
@@ -2844,6 +3888,7 @@ private fun ScheduleRisk.color(): Color {
     }
 }
 
+@Composable
 private fun TodoPriority.color(): Color {
     return when (this) {
         TodoPriority.High -> Danger
@@ -2857,6 +3902,23 @@ private fun TodoPriority.label(): String {
         TodoPriority.High -> "高"
         TodoPriority.Medium -> "中"
         TodoPriority.Low -> "低"
+    }
+}
+
+private fun TodoPriority.backendValue(): String {
+    return when (this) {
+        TodoPriority.High -> "high"
+        TodoPriority.Medium -> "medium"
+        TodoPriority.Low -> "low"
+    }
+}
+
+@Composable
+private fun String.priorityColor(): Color {
+    return when (this) {
+        "high" -> Danger
+        "low" -> Success
+        else -> Risk
     }
 }
 

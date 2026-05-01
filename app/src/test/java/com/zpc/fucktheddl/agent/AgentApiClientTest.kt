@@ -44,6 +44,80 @@ class AgentApiClientTest {
         }
     }
 
+    @Test
+    fun proposePollsQueuedAgentJobUntilProposalIsReady() {
+        var proposeToken = ""
+        var jobToken = ""
+        withHealthServer(statusCode = 200, body = "{\"status\":\"ok\"}") { baseUrl, server ->
+            server.createContext("/agent/propose") { exchange ->
+                proposeToken = exchange.requestHeaders.getFirst("X-Agent-Token")
+                    ?: exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ")
+                val bytes = """{"job_id":"job-1","status":"queued"}""".toByteArray(Charsets.UTF_8)
+                exchange.sendResponseHeaders(202, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+            server.createContext("/agent/jobs/job-1") { exchange ->
+                jobToken = exchange.requestHeaders.getFirst("X-Agent-Token")
+                    ?: exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ")
+                val bytes = """
+                    {
+                      "job_id": "job-1",
+                      "status": "succeeded",
+                      "response": {
+                        "session_id": "android-test",
+                        "write_policy": "proposal_required",
+                        "chain": [],
+                        "proposal": {
+                          "id": "proposal-1",
+                          "commitment_type": "todo",
+                          "title": "测试待办",
+                          "summary": "准备创建待办：测试待办。",
+                          "impact": "",
+                          "requires_confirmation": true,
+                          "schedule_patch": null,
+                          "todo_patch": {
+                            "title": "测试待办",
+                            "due": "2026-05-01",
+                            "timezone": "Asia/Shanghai",
+                            "priority": "medium",
+                            "notes": "备注",
+                            "tags": []
+                          },
+                          "delete_patch": null,
+                          "update_patch": null,
+                          "candidates": [
+                            {
+                              "id": "evt_1",
+                              "target_type": "schedule",
+                              "title": "候选日程",
+                              "when": "今天 09:00",
+                              "detail": "备注",
+                              "resolution_text": "删除 #evt_1",
+                              "action_label": "删除"
+                            }
+                          ]
+                        }
+                      },
+                      "error": null
+                    }
+                """.trimIndent().toByteArray(Charsets.UTF_8)
+                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+            }
+
+            val result = AgentApiClient(
+                AgentApiConfig(baseUrl = baseUrl, accessToken = "token-1"),
+            ).propose(text = "明天完成测试", sessionId = "android-test")
+
+            assertEquals(null, result.error)
+            assertEquals("token-1", proposeToken)
+            assertEquals("token-1", jobToken)
+            assertEquals("测试待办", result.proposal?.title)
+            assertEquals("备注", result.proposal?.todoPatch?.notes)
+            assertEquals("删除", result.proposal?.candidates?.firstOrNull()?.actionLabel)
+        }
+    }
+
     private fun withHealthServer(
         statusCode: Int,
         body: String,

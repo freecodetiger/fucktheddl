@@ -11,6 +11,7 @@ data class AgentApiConfig(
 data class AgentConnectionSettings(
     val baseUrl: String,
     val accessToken: String = "",
+    val userEmail: String = "",
     val deepseekApiKey: String = "",
     val deepseekBaseUrl: String = "https://api.deepseek.com/v1",
     val deepseekModel: String = "deepseek-v4-flash",
@@ -91,6 +92,7 @@ data class AgentProposalCandidate(
     val whenLabel: String,
     val detail: String,
     val resolutionText: String,
+    val actionLabel: String = "选择",
 )
 
 data class AgentSubmitResult(

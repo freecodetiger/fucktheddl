@@ -181,6 +181,7 @@ class AliyunRealtimeAsrClient(
                 JSONObject()
                     .put("model", session.getString("model"))
                     .put("sample_rate", session.getInt("sample_rate"))
+                    .put("sr_format", "pcm")
                     .put("enable_intermediate_result", true)
                     .put("enable_punctuation_prediction", true)
                     .put("enable_inverse_text_normalization", true),
