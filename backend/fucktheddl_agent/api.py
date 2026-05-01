@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from fucktheddl_agent.auth import AuthService, UserContext, authenticate_request
 from fucktheddl_agent.auth_store import AuthStore
 from fucktheddl_agent.config import load_settings
-from fucktheddl_agent.email_sender import FakeEmailSender, ResendEmailSender
+from fucktheddl_agent.email_sender import EmailDeliveryError, FakeEmailSender, ResendEmailSender
 from fucktheddl_agent.jobs import RedisAgentJobQueue
 from fucktheddl_agent.model_gateway import ModelGateway
 from fucktheddl_agent.schemas import (
@@ -77,7 +77,13 @@ def create_app(data_root: Path | None = None, job_queue=None) -> FastAPI:
 
     @router.post("/auth/code/request", status_code=status.HTTP_204_NO_CONTENT)
     def request_auth_code(request: AuthCodeRequest) -> Response:
-        auth_service.request_code(request.email)
+        try:
+            auth_service.request_code(request.email)
+        except EmailDeliveryError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Email delivery failed: {exc}",
+            ) from exc
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.post("/auth/code/verify", response_model=AuthCodeVerifyResponse)

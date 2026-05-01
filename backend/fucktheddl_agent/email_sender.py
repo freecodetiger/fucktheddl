@@ -20,6 +20,12 @@ class EmailSender(Protocol):
         ...
 
 
+class EmailDeliveryError(RuntimeError):
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class FakeEmailSender:
     def __init__(self) -> None:
         self.sent: list[LoginCodeEmail] = []
@@ -62,6 +68,31 @@ class ResendEmailSender:
                 if response.status < 200 or response.status >= 300:
                     raise RuntimeError(f"Resend email failed with HTTP {response.status}")
         except HTTPError as exc:
-            raise RuntimeError(f"Resend email failed with HTTP {exc.code}") from exc
+            detail = _read_http_error_detail(exc)
+            message = f"Resend email failed with HTTP {exc.code}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise EmailDeliveryError(message, status_code=exc.code) from exc
         except (URLError, TimeoutError) as exc:
-            raise RuntimeError("Resend email request failed") from exc
+            raise EmailDeliveryError("Resend email request failed") from exc
+
+
+def _read_http_error_detail(error: HTTPError) -> str:
+    if error.fp is None:
+        return ""
+    try:
+        raw = error.fp.read()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        return raw.decode("utf-8", errors="replace")[:300]
+    if isinstance(payload, dict):
+        for key in ("message", "error", "detail"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return value[:300]
+    return ""

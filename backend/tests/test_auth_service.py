@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from fucktheddl_agent.auth import AuthService
 from fucktheddl_agent.auth_store import AuthStore
-from fucktheddl_agent.email_sender import FakeEmailSender
+from fucktheddl_agent.email_sender import EmailDeliveryError, FakeEmailSender
 
 
 def make_service(tmp_path, now_provider=None):
@@ -40,6 +40,20 @@ def test_repeat_code_request_within_cooldown_is_rejected(tmp_path):
         service.request_code("user@example.com")
 
     assert error.value.status_code == 429
+
+
+def test_failed_email_delivery_does_not_create_cooldown_record(tmp_path):
+    class FailingSender:
+        def send_login_code(self, email):
+            raise EmailDeliveryError("resend rejected sender", status_code=403)
+
+    store = AuthStore(tmp_path / "auth.sqlite3")
+    service = AuthService(store=store, email_sender=FailingSender())
+
+    with pytest.raises(EmailDeliveryError):
+        service.request_code("user@example.com")
+
+    assert store.latest_verification_code("user@example.com") is None
 
 
 def test_wrong_code_locks_after_three_attempts(tmp_path):

@@ -48,11 +48,6 @@ class AuthService:
             raise HTTPException(status_code=429, detail="Verification code was requested too recently")
 
         code = f"{secrets.randbelow(1_000_000):06d}"
-        self.store.create_verification_code(
-            email=normalized,
-            code_hash=_hash_secret(code),
-            expires_at=now + timedelta(minutes=5),
-        )
         self.email_sender.send_login_code(
             LoginCodeEmail(
                 to_email=normalized,
@@ -60,6 +55,11 @@ class AuthService:
                 expires_minutes=5,
                 product_name=self.product_name,
             )
+        )
+        self.store.create_verification_code(
+            email=normalized,
+            code_hash=_hash_secret(code),
+            expires_at=now + timedelta(minutes=5),
         )
 
     def verify_code(self, email: str, code: str) -> VerifiedLogin:
