@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Protocol
 from urllib import request
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 
 @dataclass(frozen=True)
@@ -63,3 +63,5 @@ class ResendEmailSender:
                     raise RuntimeError(f"Resend email failed with HTTP {response.status}")
         except HTTPError as exc:
             raise RuntimeError(f"Resend email failed with HTTP {exc.code}") from exc
+        except (URLError, TimeoutError) as exc:
+            raise RuntimeError("Resend email request failed") from exc
