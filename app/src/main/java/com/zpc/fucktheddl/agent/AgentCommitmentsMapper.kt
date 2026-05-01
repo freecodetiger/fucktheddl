@@ -52,8 +52,10 @@ private fun String.toDueLabel(): String {
 
 private fun String.toTodoPriority(): TodoPriority {
     return when (this) {
-        "high" -> TodoPriority.High
-        "low" -> TodoPriority.Low
-        else -> TodoPriority.Medium
+        "high", "q1" -> TodoPriority.UrgentImportant
+        "medium", "q2" -> TodoPriority.ImportantNotUrgent
+        "low", "q3" -> TodoPriority.UrgentNotImportant
+        "q4" -> TodoPriority.NotUrgentNotImportant
+        else -> TodoPriority.ImportantNotUrgent
     }
 }

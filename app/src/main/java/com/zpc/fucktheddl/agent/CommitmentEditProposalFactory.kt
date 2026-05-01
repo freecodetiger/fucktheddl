@@ -45,7 +45,7 @@ fun createTodoProposal(
 ): AgentProposal {
     val normalizedTitle = title.trim().ifBlank { "新待办" }
     val normalizedDue = due.trim()
-    val normalizedPriority = priority.normalizedPriority(fallback = "medium")
+    val normalizedPriority = priority.normalizedPriority(fallback = "q2")
     val patch = AgentTodoPatch(
         title = normalizedTitle,
         due = normalizedDue,
@@ -146,18 +146,20 @@ private fun String.normalizedClock(fallback: String): String {
 
 private fun String.normalizedPriority(fallback: String): String {
     return when (trim().lowercase(Locale.ROOT)) {
-        "high", "高", "高优先级" -> "high"
-        "low", "低", "低优先级" -> "low"
-        "medium", "中", "中优先级" -> "medium"
+        "high", "q1", "高", "高优先级", "重要且紧急" -> "q1"
+        "medium", "q2", "中", "中优先级", "重要不紧急" -> "q2"
+        "low", "q3", "低", "低优先级", "紧急不重要" -> "q3"
+        "q4", "不重要不紧急" -> "q4"
         else -> fallback
     }
 }
 
 private fun TodoPriority.toBackendPriority(): String {
     return when (this) {
-        TodoPriority.High -> "high"
-        TodoPriority.Medium -> "medium"
-        TodoPriority.Low -> "low"
+        TodoPriority.UrgentImportant -> "q1"
+        TodoPriority.ImportantNotUrgent -> "q2"
+        TodoPriority.UrgentNotImportant -> "q3"
+        TodoPriority.NotUrgentNotImportant -> "q4"
     }
 }
 

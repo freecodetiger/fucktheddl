@@ -39,7 +39,7 @@ class StarterScheduleRepository {
                     dueLabel = "今天截止",
                     detail = "保持第一版原生闭环可构建、可安装。",
                     tag = "安卓",
-                    priority = TodoPriority.High,
+                    priority = TodoPriority.UrgentImportant,
                     done = false,
                 ),
                 TodoItem(
@@ -47,7 +47,7 @@ class StarterScheduleRepository {
                     dueLabel = "明天截止",
                     detail = "后端写入前区分日程补丁和待办补丁。",
                     tag = "后端",
-                    priority = TodoPriority.Medium,
+                    priority = TodoPriority.ImportantNotUrgent,
                     done = false,
                 ),
                 TodoItem(
@@ -55,7 +55,7 @@ class StarterScheduleRepository {
                     dueLabel = "本周截止",
                     detail = "把已验证的原型决策沉淀到原生界面任务中。",
                     tag = "设计",
-                    priority = TodoPriority.Low,
+                    priority = TodoPriority.NotUrgentNotImportant,
                     done = true,
                 ),
             ),

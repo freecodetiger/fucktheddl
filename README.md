@@ -1,70 +1,66 @@
-# FuckTheDDL
+# DDL Agent
 
-**自然语言驱动的日程管理 Agent** — 用说话的方式管理你的日程和待办。
+用 **说话** 的方式管理日程和待办。
 
-> "明天下午三点上地理课"、"周五前完成计算机网络作业"、"把明天的午睡改到四点"
+DDL Agent 是一个本地优先的 Android 日程助手。你可以直接说「明天下午三点上地理课」「周五前交作业」「取消下午的会议」，AI 会把自然语言整理成结构化提案，只有在你确认后才写入。
 
-AI 理解你的自然语言，生成结构化的日程提案，你确认后才会写入 — **AI 决不会直接修改你的数据**。
+<p>
+  <a href="https://github.com/freecodetiger/fucktheddl/releases/latest/download/app-debug.apk"><strong>下载 Android APK</strong></a>
+  ·
+  <a href="https://ddlagent.praw.top">产品页</a>
+  ·
+  <a href="https://ddl.praw.top/health">服务状态</a>
+</p>
+
+<p>
+  <img src="docs/assets/app-store-promo.png" alt="DDL Agent 产品宣传图" width="900">
+</p>
+
+## 核心体验
+
+| 方向 | 说明 |
+|---|---|
+| 语音优先 | 底部按住说话，松手发送；识别文本会进入 AI 提案流程。 |
+| 本地数据 | 日程和待办存储在手机 Room SQLite，服务端只负责认证、语音授权和 AI 转发。 |
+| 确认写入 | AI 只生成提案，用户确认、编辑或取消后才会写入本地数据。 |
+| 自带 Key | 用户在设置中填写自己的 DeepSeek API Key，费用和调用归用户掌控。 |
+| 深浅主题 | 提供克制的浅色主题和纯黑深色主题，贴近 iOS 原生工具感。 |
+
+## 功能
+
+- 自然语言创建、修改、删除、查询日程和待办。
+- 长按日程或待办进入编辑卡片。
+- 全局创建入口，可手动创建日程或待办；待办支持不设截止日期。
+- 模糊删除会返回候选列表，用户选择后再确认。
+- 语音输入使用阿里云 DashScope FunASR 实时识别。
+- 邮箱验证码登录，每个用户通过 token 区分。
+- Redis 队列异步处理 Agent 请求，削峰并避免阻塞 API 入口。
 
 ## 架构
 
-```
-你说话/打字 → Android App → 后端 AI Agent (DeepSeek) → 生成提案 → 你确认/修改 → 写入本地数据库
-```
+```text
+Android App
+  ├─ Room SQLite：本地日程和待办
+  ├─ 语音录音与实时 ASR
+  └─ Propose-Apply：确认后本地写入
 
-- **Propose-Apply 写策略**：AI 只提议不动手，所有写入必须经过用户明确确认
-- **本地优先**：日程和待办数据存在手机本地（Room SQLite），后端只做 AI 推理
-- **自带 API Key**：用户可在应用设置中填写自己的 DeepSeek API Key，数据不经过服务端
+Backend
+  ├─ FastAPI：认证、ASR 会话、Agent API
+  ├─ Redis Queue：异步执行 Agent 请求
+  ├─ Resend：邮箱验证码
+  └─ DeepSeek/OpenAI-compatible：自然语言解析
+```
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|---|
+| Android | Kotlin / Jetpack Compose / Material3 / Room |
 | 后端 | Python / FastAPI / LangGraph / LangChain / Redis / SQLite |
-| 前端 | Kotlin / Jetpack Compose / Material3 / Room |
-| AI 模型 | DeepSeek (默认 `deepseek-v4-flash`) |
-| 语音识别 | 阿里云 DashScope FunASR 实时语音转文字 |
-| 邮件验证 | Resend API（免密码邮箱登录） |
-
-## 功能
-
-- 自然语言创建日程和待办
-- 语音输入支持（阿里云 ASR 实时识别）
-- 删除、修改、查询已有日程
-- 冲突检测和影响分析
-- 邮箱验证码免密码登录
-- 深色/浅色主题
-- Git 审计追踪（每次写入自动提交）
-
-## 项目结构
-
-```
-fucktheddl/
-├── backend/                      # Python 后端
-│   ├── fucktheddl_agent/
-│   │   ├── api.py                # FastAPI 路由
-│   │   ├── auth.py               # 认证服务
-│   │   ├── auth_store.py         # SQLite 认证存储
-│   │   ├── config.py             # 配置（环境变量）
-│   │   ├── email_sender.py       # Resend 邮件发送
-│   │   ├── jobs.py               # Redis 异步任务队列
-│   │   ├── model_gateway.py      # LLM 调用网关
-│   │   ├── schemas.py            # Pydantic 数据模型
-│   │   ├── service.py            # Agent 核心服务
-│   │   ├── storage.py            # JSON + Git 数据持久化
-│   │   └── workflow.py           # LangGraph Agent 状态机
-│   └── tests/
-├── app/                          # Android 客户端
-│   └── src/main/java/com/zpc/fucktheddl/
-│       ├── agent/                # API 客户端
-│       ├── auth/                 # 认证与会话管理
-│       ├── commitments/          # Room 本地数据库
-│       ├── ui/                   # Compose UI
-│       └── voice/                # ASR 语音客户端
-├── prototype/                    # UI 原型
-├── docs/                         # 设计文档
-└── pyproject.toml
-```
+| 模型 | DeepSeek，默认 `deepseek-v4-flash` |
+| 语音 | 阿里云 DashScope FunASR 实时语音识别 |
+| 邮件 | Resend API |
+| 发布 | GitHub Actions 自动构建 APK 和 Release |
 
 ## 快速开始
 
@@ -74,55 +70,88 @@ fucktheddl/
 git clone https://github.com/freecodetiger/fucktheddl.git
 cd fucktheddl
 
-# 安装依赖
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
 
-# 配置环境变量（复制并编辑 .env）
 cp .env.example .env
-
-# 启动 Redis（异步任务队列需要）
 redis-server
 
-# 启动后端
-python -m uvicorn fucktheddl_agent.api:app --app-dir backend --host 0.0.0.0 --port 8000
+python -m uvicorn fucktheddl_agent.api:app \
+  --app-dir backend \
+  --host 0.0.0.0 \
+  --port 8000
 ```
 
-### 环境变量
+### Android
+
+```bash
+echo "agent.baseUrl=https://ddl.praw.top" >> local.properties
+./gradlew assembleDebug
+```
+
+APK 输出位置：
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+## 环境变量
 
 | 变量 | 说明 | 默认值 |
 |---|---|---|
-| `OPENAI_API_KEY` | DeepSeek API Key | - |
-| `OPENAI_BASE_URL` | API 地址 | `https://api.deepseek.com/v1` |
+| `OPENAI_API_KEY` | 服务端默认模型 Key，通常关闭，让用户填写自己的 Key | - |
+| `OPENAI_BASE_URL` | OpenAI-compatible API 地址 | `https://api.deepseek.com/v1` |
 | `OPENAI_MODEL` | 模型名称 | `deepseek-v4-flash` |
-| `FUCKTHEDDL_USE_MODEL` | 启用服务端模型 | `false` |
+| `OPENAI_DISABLE_THINKING` | 关闭思考模式 | `true` |
+| `FUCKTHEDDL_USE_MODEL` | 是否启用服务端默认模型 | `false` |
 | `ALIYUN_API_KEY` | 阿里云 ASR Key | - |
 | `RESEND_API_KEY` | Resend 邮件 API Key | - |
-| `RESEND_FROM_EMAIL` | 发件邮箱 | - |
-| `FUCKTHEDDL_REDIS_URL` | Redis 地址 | `redis://127.0.0.1:6379/0` |
-| `FUCKTHEDDL_DATA_ROOT` | 数据目录 | `.` |
-
-### Android 客户端
-
-1. Android Studio 打开项目根目录
-2. 在 `local.properties` 中设置 `agent.baseUrl` 指向后端地址
-3. `./gradlew assembleDebug` 构建
-4. 安装 APK 到设备
+| `RESEND_FROM_EMAIL` | 验证码发件地址 | - |
+| `FUCKTHEDDL_REDIS_URL` | Redis 队列地址 | `redis://127.0.0.1:6379/0` |
+| `FUCKTHEDDL_DATA_ROOT` | 服务端运行数据目录 | `.` |
 
 ## API 概要
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/health` | GET | 服务状态 |
-| `/auth/code/request` | POST | 发送邮箱验证码 |
-| `/auth/code/verify` | POST | 验证码校验，返回 Token |
-| `/agent/propose` | POST | 提交自然语言指令，返回 job_id |
-| `/agent/jobs/{job_id}` | GET | 轮询任务结果 |
-| `/agent/confirm/{proposal_id}` | POST | 确认提案 |
-| `/agent/proposal/{proposal_id}/edit` | POST | 修改提案 |
-| `/agent/undo/{commitment_id}` | POST | 撤销（软删除） |
-| `/commitments` | GET | 列出所有日程和待办 |
-| `/asr/session` | GET | 获取 ASR 会话凭证 |
+| `/health` | `GET` | 服务状态 |
+| `/auth/code/request` | `POST` | 发送邮箱验证码 |
+| `/auth/code/verify` | `POST` | 验证码登录，返回 token |
+| `/agent/propose` | `POST` | 提交自然语言，返回 job id |
+| `/agent/jobs/{job_id}` | `GET` | 查询 Agent 异步结果 |
+| `/commitments` | `GET` | 兼容接口，客户端当前以本地 Room 为主 |
+| `/asr/session` | `GET` | 获取 ASR 会话凭证 |
+
+## 项目结构
+
+```text
+backend/                         Python 后端
+  fucktheddl_agent/
+    api.py                       FastAPI 路由
+    auth.py                      邮箱登录与 token 鉴权
+    jobs.py                      Redis 队列
+    model_gateway.py             LLM 调用网关
+    service.py                   Agent 服务层
+    workflow.py                  LangGraph 状态机
+app/                             Android 客户端
+  src/main/java/com/zpc/fucktheddl/
+    agent/                       API 模型与客户端
+    auth/                        登录会话
+    commitments/room/            Room 本地持久化
+    ui/                          Compose UI
+    voice/                       实时 ASR 客户端
+docs/                            文档与展示资源
+prototype/                       Web 原型
+```
+
+## 验证
+
+```bash
+.venv/bin/pytest backend/tests -q
+./gradlew testDebugUnitTest
+./gradlew assembleDebug
+```
 
 ## License
 

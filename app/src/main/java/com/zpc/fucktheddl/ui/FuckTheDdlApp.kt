@@ -1,5 +1,7 @@
 package com.zpc.fucktheddl.ui
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.compose.animation.animateContentSize
@@ -67,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -80,8 +83,10 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -374,12 +379,15 @@ private sealed interface CommitmentEditTarget {
     data class Todo(val todo: TodoItem) : CommitmentEditTarget
 }
 
-private data class CommitmentEditMenuRequest(
-    val target: CommitmentEditTarget,
-    val anchor: Offset,
-)
+private sealed interface UpdateCheckState {
+    data object Idle : UpdateCheckState
+    data object Checking : UpdateCheckState
+    data object UpToDate : UpdateCheckState
+    data class UpdateAvailable(val version: String) : UpdateCheckState
+    data object Failed : UpdateCheckState
+}
 
-private typealias CommitmentEditRequester = (CommitmentEditTarget, Offset) -> Unit
+private typealias CommitmentEditRequester = (CommitmentEditTarget) -> Unit
 
 private fun Modifier.commitmentLongPressMenu(
     target: CommitmentEditTarget?,
@@ -387,14 +395,27 @@ private fun Modifier.commitmentLongPressMenu(
     onTap: () -> Unit = {},
     onBeforeEdit: () -> Unit = {},
 ): Modifier = composed {
-    var origin by remember(target) { mutableStateOf(Offset.Zero) }
-    onGloballyPositioned { origin = it.positionInRoot() }
+    var pressed by remember { mutableStateOf(false) }
+    // Auto-reset scale after brief press animation
+    LaunchedEffect(pressed) {
+        if (pressed) {
+            kotlinx.coroutines.delay(400)
+            pressed = false
+        }
+    }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = 0.3f, stiffness = 800f),
+        label = "longPressScale",
+    )
+    scale(scale)
         .pointerInput(target) {
             detectTapGestures(
-                onLongPress = { pressOffset ->
+                onLongPress = {
                     target?.let {
+                        pressed = true
                         onBeforeEdit()
-                        onEdit(it, origin + pressOffset)
+                        onEdit(it)
                     }
                 },
                 onTap = { onTap() },
@@ -428,7 +449,6 @@ fun FuckTheDdlApp(
     var selectedTab by remember { mutableStateOf(if (initialState.selectedTab.destination == TabDestination.Todo) todoTab else todayTab) }
     var showingCalendar by remember { mutableStateOf(false) }
     var showingSettings by remember { mutableStateOf(false) }
-    var activeEditMenu by remember { mutableStateOf<CommitmentEditMenuRequest?>(null) }
     var activeEditTarget by remember { mutableStateOf<CommitmentEditTarget?>(null) }
     var createMenuVisible by remember { mutableStateOf(false) }
     var activeCreateKind by remember { mutableStateOf<CreateCommitmentKind?>(null) }
@@ -565,8 +585,8 @@ fun FuckTheDdlApp(
                             events = shellState.events,
                             todos = shellState.todos,
                             onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target, anchor ->
-                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            onEditCommitment = { target ->
+                                activeEditTarget = target
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -577,8 +597,8 @@ fun FuckTheDdlApp(
                             events = shellState.events,
                             todos = shellState.todos,
                             onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target, anchor ->
-                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            onEditCommitment = { target ->
+                                activeEditTarget = target
                             },
                             modifier = Modifier.weight(1f),
                         )
@@ -586,8 +606,8 @@ fun FuckTheDdlApp(
                         selectedTab.destination == TabDestination.Todo -> TodoSurface(
                             todos = shellState.todos,
                             onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target, anchor ->
-                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            onEditCommitment = { target ->
+                                activeEditTarget = target
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -598,22 +618,12 @@ fun FuckTheDdlApp(
                             events = shellState.events,
                             todos = shellState.todos,
                             onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target, anchor ->
-                                activeEditMenu = CommitmentEditMenuRequest(target, anchor)
+                            onEditCommitment = { target ->
+                                activeEditTarget = target
                             },
                             modifier = Modifier.weight(1f),
                         )
                     }
-                }
-                activeEditMenu?.let { request ->
-                    RootEditBubbleOverlay(
-                        request = request,
-                        onDismiss = { activeEditMenu = null },
-                        onEdit = {
-                            activeEditMenu = null
-                            activeEditTarget = request.target
-                        },
-                    )
                 }
                 activeEditTarget?.let { target ->
                     CommitmentEditOverlay(
@@ -625,7 +635,7 @@ fun FuckTheDdlApp(
                         },
                     )
                 }
-                if (!voiceRecording && !showingSettings && activeEditMenu == null && activeEditTarget == null && activeCreateKind == null) {
+                if (!voiceRecording && !showingSettings && activeEditTarget == null && activeCreateKind == null) {
                     GlobalCreateFab(
                         menuVisible = createMenuVisible,
                         onToggle = { createMenuVisible = !createMenuVisible },
@@ -908,6 +918,73 @@ private fun SettingsRootMenu(
         value = BuildConfig.VERSION_NAME,
         leadingColor = Ink,
     )
+    val context = LocalContext.current
+    val currentVersion = BuildConfig.VERSION_NAME
+    var updateState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
+
+    fun checkUpdate() {
+        updateState = UpdateCheckState.Checking
+        Thread {
+            try {
+                val url = java.net.URL("https://github.com/freecodetiger/fucktheddl/releases/latest")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.setRequestProperty("User-Agent", "fucktheddl/1.0")
+                conn.instanceFollowRedirects = false
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                val responseUrl = conn.getHeaderField("Location") ?: conn.url.toString()
+                conn.disconnect()
+                val remoteTag = responseUrl.substringAfterLast("/").removePrefix("v")
+                val remoteParts = remoteTag.split(".").map { it.toIntOrNull() ?: 0 }
+                val localParts = currentVersion.split(".").map { it.toIntOrNull() ?: 0 }
+                val newer = remoteParts.zip(localParts).any { (r, l) -> r > l } ||
+                        (remoteParts.size > localParts.size && remoteParts.take(localParts.size) == localParts)
+                Handler(Looper.getMainLooper()).post {
+                    updateState = if (newer) UpdateCheckState.UpdateAvailable(remoteTag)
+                    else UpdateCheckState.UpToDate
+                }
+            } catch (_: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                    updateState = UpdateCheckState.Failed
+                }
+            }
+        }.start()
+    }
+
+    when (val state = updateState) {
+        UpdateCheckState.Idle -> SettingsMenuRow(
+            title = "检查更新",
+            detail = "点击检查",
+            swatch = Accent,
+            onClick = { checkUpdate() },
+        )
+        UpdateCheckState.Checking -> SettingsMenuRow(
+            title = "检查更新",
+            detail = "检查中...",
+            onClick = {},
+        )
+        UpdateCheckState.UpToDate -> SettingsMenuRow(
+            title = "检查更新",
+            detail = "已是最新版本",
+            swatch = Success,
+            onClick = {},
+        )
+        is UpdateCheckState.UpdateAvailable -> SettingsMenuRow(
+            title = "检查更新",
+            detail = "下载 v${state.version}",
+            swatch = Danger,
+            onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/freecodetiger/fucktheddl/releases/latest"))
+                context.startActivity(intent)
+            },
+        )
+        UpdateCheckState.Failed -> SettingsMenuRow(
+            title = "检查更新",
+            detail = "检查失败，点击重试",
+            swatch = Risk,
+            onClick = { checkUpdate() },
+        )
+    }
     Button(
         onClick = onClose,
         colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
@@ -1725,8 +1802,8 @@ private fun InlineScheduleEditor(
         CompactEditField(value = title, onValueChange = onTitleChange, label = "标题")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             DatePickerField(value = date, onDateChange = onDateChange, label = "日期", modifier = Modifier.weight(1.25f))
-            TimePickerField(value = startTime, onTimeChange = onStartTimeChange, label = "开始", modifier = Modifier.weight(1f))
-            TimePickerField(value = endTime, onTimeChange = onEndTimeChange, label = "结束", modifier = Modifier.weight(1f))
+            TimePickerField(value = startTime, onTimeChange = onStartTimeChange, label = "开始", modifier = Modifier.weight(1f), dialogTitle = "选择开始时间")
+            TimePickerField(value = endTime, onTimeChange = onEndTimeChange, label = "结束", modifier = Modifier.weight(1f), dialogTitle = "选择结束时间")
         }
         CompactEditField(value = notes, onValueChange = onNotesChange, label = "备注", singleLine = false)
         InlineEditActions(onSave = onSave, onCancel = onCancel)
@@ -1759,38 +1836,144 @@ private fun InlineTodoEditor(
             date = due,
             onDateChange = onDueChange,
         )
-        PriorityPicker(priority = priority, onPriorityChange = onPriorityChange)
+        PriorityQuadrantPicker(priority = priority, onPriorityChange = onPriorityChange)
         CompactEditField(value = notes, onValueChange = onNotesChange, label = "备注", singleLine = false)
         InlineEditActions(onSave = onSave, onCancel = onCancel)
     }
 }
 
 @Composable
-private fun PriorityPicker(
+private fun PriorityQuadrantPicker(
     priority: String,
     onPriorityChange: (String) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("high" to "高", "medium" to "中", "low" to "低").forEach { (value, label) ->
-            val selected = priority == value
-            val color = value.priorityColor()
-            Surface(
-                color = if (selected) color else Panel,
-                shape = RoundedCornerShape(999.dp),
-                modifier = Modifier
-                    .border(1.dp, if (selected) color else Divider, RoundedCornerShape(999.dp))
-                    .pointerInput(value) {
-                        detectTapGestures(onTap = { onPriorityChange(value) })
-                    },
-            ) {
-                Text(
-                    text = label,
-                    color = if (selected) readableOn(color) else Muted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
-                )
-            }
+    val quadrants = listOf(
+        "q1" to QuadrantInfo(label = "重要且紧急", sub = "立刻做", color = Danger, icon = "⇧"),
+        "q2" to QuadrantInfo(label = "重要不紧急", sub = "计划做", color = Ink, icon = "⇧"),
+        "q3" to QuadrantInfo(label = "紧急不重要", sub = "委派做", color = Risk, icon = "⤓"),
+        "q4" to QuadrantInfo(label = "不重要不紧急", sub = "最后做", color = Success, icon = "⤓"),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            // Header labels
+            Box(modifier = Modifier.weight(0.15f))
+            Text(
+                text = "紧急",
+                fontSize = 10.sp,
+                color = Muted,
+                modifier = Modifier.weight(0.425f),
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = "不紧急",
+                fontSize = 10.sp,
+                color = Muted,
+                modifier = Modifier.weight(0.425f),
+                textAlign = TextAlign.Center,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            // Row label
+            Text(
+                text = "重要",
+                fontSize = 10.sp,
+                color = Muted,
+                modifier = Modifier.weight(0.15f).align(Alignment.CenterVertically),
+            )
+            // Q1: Urgent + Important
+            val q1 = quadrants[0]
+            QuadrantCell(
+                info = q1.second,
+                selected = priority == q1.first,
+                onClick = { onPriorityChange(q1.first) },
+                modifier = Modifier.weight(0.425f),
+            )
+            // Q2: Important + Not Urgent
+            val q2 = quadrants[1]
+            QuadrantCell(
+                info = q2.second,
+                selected = priority == q2.first,
+                onClick = { onPriorityChange(q2.first) },
+                modifier = Modifier.weight(0.425f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            // Row label
+            Text(
+                text = "不重要",
+                fontSize = 10.sp,
+                color = Muted,
+                modifier = Modifier.weight(0.15f).align(Alignment.CenterVertically),
+            )
+            // Q3: Urgent + Not Important
+            val q3 = quadrants[2]
+            QuadrantCell(
+                info = q3.second,
+                selected = priority == q3.first,
+                onClick = { onPriorityChange(q3.first) },
+                modifier = Modifier.weight(0.425f),
+            )
+            // Q4: Not Urgent + Not Important
+            val q4 = quadrants[3]
+            QuadrantCell(
+                info = q4.second,
+                selected = priority == q4.first,
+                onClick = { onPriorityChange(q4.first) },
+                modifier = Modifier.weight(0.425f),
+            )
+        }
+    }
+}
+
+private data class QuadrantInfo(
+    val label: String,
+    val sub: String,
+    val color: Color,
+    val icon: String,
+)
+
+@Composable
+private fun QuadrantCell(
+    info: QuadrantInfo,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = if (selected) info.color.copy(alpha = 0.15f) else Panel,
+        shape = RoundedCornerShape(10.dp),
+        modifier = modifier
+            .border(
+                1.5.dp,
+                if (selected) info.color else Divider,
+                RoundedCornerShape(10.dp),
+            )
+            .pointerInput(info.label) { detectTapGestures(onTap = { onClick() }) },
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = info.label,
+                color = if (selected) info.color else Muted,
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            )
+            Text(
+                text = info.sub,
+                color = if (selected) info.color.copy(alpha = 0.7f) else Muted.copy(alpha = 0.6f),
+                fontSize = 9.sp,
+            )
         }
     }
 }
@@ -1951,6 +2134,7 @@ private fun TimePickerField(
     onTimeChange: (String) -> Unit,
     label: String,
     modifier: Modifier = Modifier,
+    dialogTitle: String = "选择时间",
 ) {
     var showDialog by remember { mutableStateOf(false) }
 
@@ -2027,7 +2211,7 @@ private fun TimePickerField(
         MaterialTheme(colorScheme = dialogColorScheme) {
             TimePickerDialog(
                 onDismissRequest = { showDialog = false },
-                title = { Text("选择时间", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink) },
+                title = { Text(dialogTitle, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Ink) },
                 confirmButton = {
                     TextAction(text = "确定", onClick = {
                         onTimeChange("%02d:%02d".format(timePickerState.hour, timePickerState.minute))
@@ -2075,53 +2259,6 @@ private fun DeadlinePicker(
         if (hasDeadline) {
             DatePickerField(value = date, onDateChange = onDateChange, label = "")
         }
-    }
-}
-
-@Composable
-private fun EditDecisionBubble(
-    onEdit: () -> Unit,
-) {
-    Surface(
-        color = Color.White,
-        shape = RoundedCornerShape(999.dp),
-        shadowElevation = 0.dp,
-        modifier = Modifier
-            .border(1.dp, Color(0xFFE5E5EA), RoundedCornerShape(999.dp)),
-    ) {
-        Text(
-            text = "编辑",
-            color = Color.Black,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = { onEdit() })
-                }
-                .padding(horizontal = 18.dp, vertical = 9.dp),
-        )
-    }
-}
-
-@Composable
-private fun RootEditBubbleOverlay(
-    request: CommitmentEditMenuRequest,
-    onDismiss: () -> Unit,
-    onEdit: () -> Unit,
-) {
-    Popup(
-        alignment = Alignment.TopStart,
-        offset = IntOffset(
-            x = (request.anchor.x.roundToInt() - 20).coerceAtLeast(8),
-            y = (request.anchor.y.roundToInt() - 54).coerceAtLeast(8),
-        ),
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(
-            focusable = true,
-            dismissOnClickOutside = true,
-        ),
-    ) {
-        EditDecisionBubble(onEdit = onEdit)
     }
 }
 
@@ -2365,7 +2502,7 @@ private fun TodoCreateCard(
     var due by remember { mutableStateOf("") }
     var hasDeadline by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
-    var priority by remember { mutableStateOf("medium") }
+    var priority by remember { mutableStateOf("q2") }
     Column(
         modifier = Modifier.padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -3873,23 +4010,25 @@ private fun EditableScheduleFields(
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         CompactEditField(value = draft.title, onValueChange = { onDraftChanged(draft.copy(title = it)) }, label = "标题")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CompactEditField(
+            DatePickerField(
                 value = draft.date,
-                onValueChange = { onDraftChanged(draft.copy(date = it)) },
+                onDateChange = { onDraftChanged(draft.copy(date = it)) },
                 label = "日期",
                 modifier = Modifier.weight(1.25f),
             )
-            CompactEditField(
+            TimePickerField(
                 value = draft.startTime,
-                onValueChange = { onDraftChanged(draft.copy(startTime = it)) },
+                onTimeChange = { onDraftChanged(draft.copy(startTime = it)) },
                 label = "开始",
                 modifier = Modifier.weight(1f),
+                dialogTitle = "选择开始时间",
             )
-            CompactEditField(
+            TimePickerField(
                 value = draft.endTime,
-                onValueChange = { onDraftChanged(draft.copy(endTime = it)) },
+                onTimeChange = { onDraftChanged(draft.copy(endTime = it)) },
                 label = "结束",
                 modifier = Modifier.weight(1f),
+                dialogTitle = "选择结束时间",
             )
         }
         CompactEditField(value = draft.notes, onValueChange = { onDraftChanged(draft.copy(notes = it)) }, label = "备注")
@@ -3903,20 +4042,15 @@ private fun EditableTodoFields(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         CompactEditField(value = draft.title, onValueChange = { onDraftChanged(draft.copy(title = it)) }, label = "标题")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CompactEditField(
-                value = draft.due,
-                onValueChange = { onDraftChanged(draft.copy(due = it)) },
-                label = "截止",
-                modifier = Modifier.weight(1.4f),
-            )
-            CompactEditField(
-                value = draft.priority,
-                onValueChange = { onDraftChanged(draft.copy(priority = it)) },
-                label = "优先级",
-                modifier = Modifier.weight(1f),
-            )
-        }
+        DatePickerField(
+            value = draft.due,
+            onDateChange = { onDraftChanged(draft.copy(due = it)) },
+            label = "截止日期",
+        )
+        PriorityQuadrantPicker(
+            priority = draft.priority.ifBlank { "q2" },
+            onPriorityChange = { onDraftChanged(draft.copy(priority = it)) },
+        )
         CompactEditField(value = draft.notes, onValueChange = { onDraftChanged(draft.copy(notes = it)) }, label = "备注")
     }
 }
@@ -4396,42 +4530,48 @@ private fun ScheduleRisk.color(): Color {
 @Composable
 private fun TodoPriority.color(): Color {
     return when (this) {
-        TodoPriority.High -> Danger
-        TodoPriority.Medium -> Risk
-        TodoPriority.Low -> Success
+        TodoPriority.UrgentImportant -> Danger
+        TodoPriority.ImportantNotUrgent -> Ink
+        TodoPriority.UrgentNotImportant -> Risk
+        TodoPriority.NotUrgentNotImportant -> Success
     }
 }
 
 private fun TodoPriority.label(): String {
     return when (this) {
-        TodoPriority.High -> "高"
-        TodoPriority.Medium -> "中"
-        TodoPriority.Low -> "低"
+        TodoPriority.UrgentImportant -> "重要且紧急"
+        TodoPriority.ImportantNotUrgent -> "重要不紧急"
+        TodoPriority.UrgentNotImportant -> "紧急不重要"
+        TodoPriority.NotUrgentNotImportant -> "不重要不紧急"
     }
 }
 
 private fun TodoPriority.backendValue(): String {
     return when (this) {
-        TodoPriority.High -> "high"
-        TodoPriority.Medium -> "medium"
-        TodoPriority.Low -> "low"
+        TodoPriority.UrgentImportant -> "q1"
+        TodoPriority.ImportantNotUrgent -> "q2"
+        TodoPriority.UrgentNotImportant -> "q3"
+        TodoPriority.NotUrgentNotImportant -> "q4"
     }
 }
 
 @Composable
 private fun String.priorityColor(): Color {
     return when (this) {
-        "high" -> Danger
-        "low" -> Success
+        "high", "q1" -> Danger
+        "medium", "q2" -> Ink
+        "low", "q3" -> Risk
+        "q4" -> Success
         else -> Risk
     }
 }
 
 private fun TodoPriority.sortWeight(): Int {
     return when (this) {
-        TodoPriority.High -> 0
-        TodoPriority.Medium -> 1
-        TodoPriority.Low -> 2
+        TodoPriority.UrgentImportant -> 0
+        TodoPriority.ImportantNotUrgent -> 1
+        TodoPriority.UrgentNotImportant -> 2
+        TodoPriority.NotUrgentNotImportant -> 3
     }
 }
 
@@ -4455,7 +4595,7 @@ private fun AgentProposal.toEditableDraft(): EditableProposalDraft {
             endTime = "",
             due = patch.due,
             notes = patch.notes,
-            priority = patch.priority,
+            priority = patch.priority.toQuadrantValue(),
         )
     }
     return EditableProposalDraft(
@@ -4465,8 +4605,18 @@ private fun AgentProposal.toEditableDraft(): EditableProposalDraft {
         endTime = "",
         due = "",
         notes = "",
-        priority = "medium",
+        priority = "q2",
     )
+}
+
+private fun String.toQuadrantValue(): String {
+    return when (lowercase()) {
+        "high", "q1" -> "q1"
+        "medium", "q2" -> "q2"
+        "low", "q3" -> "q3"
+        "q4" -> "q4"
+        else -> "q2"
+    }
 }
 
 private fun String.safeTime(): String {

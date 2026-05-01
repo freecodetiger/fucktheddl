@@ -84,7 +84,8 @@ enum class ScheduleRisk {
 }
 
 enum class TodoPriority {
-    Low,
-    Medium,
-    High,
+    UrgentImportant,       // Q1 重要且紧急 — do first
+    ImportantNotUrgent,    // Q2 重要不紧急 — schedule
+    UrgentNotImportant,    // Q3 不重要但紧急 — delegate
+    NotUrgentNotImportant, // Q4 不重要不紧急 — eliminate
 }
