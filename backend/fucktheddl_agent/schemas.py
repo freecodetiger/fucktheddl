@@ -19,6 +19,26 @@ class AgentRequest(BaseModel):
     disable_thinking: bool = True
 
 
+class AuthCodeRequest(BaseModel):
+    email: str = Field(min_length=3)
+
+
+class AuthCodeVerifyRequest(BaseModel):
+    email: str = Field(min_length=3)
+    code: str = Field(min_length=6, max_length=6)
+
+
+class AuthCodeVerifyResponse(BaseModel):
+    user_id: str
+    email: str
+    access_token: str
+    newly_created: bool
+
+
+class LogoutResponse(BaseModel):
+    status: Literal["logged_out"]
+
+
 class ChainStep(BaseModel):
     label: str
     state: StepState
