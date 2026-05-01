@@ -58,6 +58,9 @@ android {
             debug {
                 signingConfig = signingConfigs.getByName("release")
             }
+            release {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 
