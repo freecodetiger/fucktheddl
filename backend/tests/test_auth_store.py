@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import threading
 
 from fucktheddl_agent.auth_store import AuthStore
 
@@ -40,3 +42,52 @@ def test_access_token_hash_authenticates_user(tmp_path):
 
     assert store.user_id_for_token_hash("token-hash") == user.user_id
     assert store.user_id_for_token_hash("wrong") is None
+
+
+def test_concurrent_same_email_get_or_create_user_calls_share_one_user(tmp_path, monkeypatch):
+    store = AuthStore(tmp_path / "auth.sqlite3")
+    barrier = threading.Barrier(2)
+    original_connect = store._connect
+
+    class BarrierConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._connection.__exit__(exc_type, exc, tb)
+
+        def execute(self, sql, parameters=()):
+            if "INSERT INTO users" in sql:
+                barrier.wait(timeout=2)
+            return self._connection.execute(sql, parameters)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    def connect_with_barrier():
+        return BarrierConnection(original_connect())
+
+    monkeypatch.setattr(store, "_connect", connect_with_barrier)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(store.get_or_create_user, "USER@example.com"),
+            executor.submit(store.get_or_create_user, "user@example.com"),
+        ]
+        results = [future.result() for future in futures]
+
+    assert {result.user_id for result in results} == {results[0].user_id}
+    assert {result.email for result in results} == {"user@example.com"}
+
+
+def test_revoked_token_hash_does_not_authenticate_user(tmp_path):
+    store = AuthStore(tmp_path / "auth.sqlite3")
+    user = store.get_or_create_user("user@example.com")
+    store.create_access_token(user.user_id, token_hash="token-hash")
+
+    assert store.revoke_token_hash("token-hash") is True
+    assert store.user_id_for_token_hash("token-hash") is None

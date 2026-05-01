@@ -35,15 +35,19 @@ class AuthStore:
         normalized = _normalize_email(email)
         now = _now()
         with self._connect() as db:
-            row = db.execute("SELECT id, email FROM users WHERE email = ?", (normalized,)).fetchone()
-            if row is not None:
-                return StoredUser(user_id=row["id"], email=row["email"])
             user_id = f"usr_{uuid4().hex}"
             db.execute(
-                "INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                """
+                INSERT INTO users (id, email, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(email) DO NOTHING
+                """,
                 (user_id, normalized, _iso(now), _iso(now)),
             )
-            return StoredUser(user_id=user_id, email=normalized)
+            row = db.execute("SELECT id, email FROM users WHERE email = ?", (normalized,)).fetchone()
+        if row is None:
+            raise RuntimeError(f"user row missing after insert/select for {normalized}")
+        return StoredUser(user_id=row["id"], email=row["email"])
 
     def find_user_by_email(self, email: str) -> StoredUser | None:
         normalized = _normalize_email(email)
@@ -115,23 +119,19 @@ class AuthStore:
         return token_id
 
     def user_id_for_token_hash(self, token_hash: str) -> str | None:
-        now = _now()
         with self._connect() as db:
             row = db.execute(
                 """
-                SELECT user_id
-                FROM access_tokens
+                UPDATE access_tokens
+                SET last_used_at = ?
                 WHERE token_hash = ? AND revoked_at IS NULL
+                RETURNING user_id
                 """,
-                (token_hash,),
+                (_iso(_now()), token_hash),
             ).fetchone()
-            if row is None:
-                return None
-            db.execute(
-                "UPDATE access_tokens SET last_used_at = ? WHERE token_hash = ?",
-                (_iso(now), token_hash),
-            )
-            return row["user_id"]
+        if row is None:
+            return None
+        return row["user_id"]
 
     def revoke_token_hash(self, token_hash: str) -> bool:
         with self._connect() as db:
