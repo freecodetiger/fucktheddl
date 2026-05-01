@@ -115,3 +115,26 @@ def test_resend_sender_converts_url_error_to_runtime_error(monkeypatch):
         assert str(exc) == "Resend email request failed"
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_resend_sender_converts_timeout_error_to_runtime_error(monkeypatch):
+    sender = ResendEmailSender(api_key="resend-key", from_email="noreply@example.com")
+
+    def fake_urlopen(req, timeout):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("fucktheddl_agent.email_sender.request.urlopen", fake_urlopen)
+
+    try:
+        sender.send_login_code(
+            LoginCodeEmail(
+                to_email="user@example.com",
+                code="654321",
+                expires_minutes=10,
+                product_name="DDL Agent",
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "Resend email request failed"
+    else:
+        raise AssertionError("expected RuntimeError")
