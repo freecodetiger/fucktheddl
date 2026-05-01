@@ -91,3 +91,31 @@ def test_revoked_token_hash_does_not_authenticate_user(tmp_path):
 
     assert store.revoke_token_hash("token-hash") is True
     assert store.user_id_for_token_hash("token-hash") is None
+
+
+def test_concurrent_token_auth_and_revoke_is_safe(tmp_path):
+    store = AuthStore(tmp_path / "auth.sqlite3")
+    user = store.get_or_create_user("user@example.com")
+
+    for attempt in range(50):
+        token_hash = f"token-hash-{attempt}"
+        store.create_access_token(user.user_id, token_hash=token_hash)
+        barrier = threading.Barrier(2)
+
+        def authenticate():
+            barrier.wait(timeout=2)
+            return store.user_id_for_token_hash(token_hash)
+
+        def revoke():
+            barrier.wait(timeout=2)
+            return store.revoke_token_hash(token_hash)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            auth_future = executor.submit(authenticate)
+            revoke_future = executor.submit(revoke)
+            auth_result = auth_future.result()
+            revoke_result = revoke_future.result()
+
+        assert auth_result in {user.user_id, None}
+        assert revoke_result is True
+        assert store.user_id_for_token_hash(token_hash) is None
