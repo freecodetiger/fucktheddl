@@ -7,7 +7,7 @@ from fucktheddl_agent.config import ModelSettings
 from fucktheddl_agent.model_gateway import ModelGateway
 from fucktheddl_agent.schemas import AgentRequest, AgentResponse, ApplyResponse, CommitmentsResponse, Proposal, ProposalEditRequest
 from fucktheddl_agent.storage import ScheduleStore
-from fucktheddl_agent.workflow import build_agent_graph, to_response
+from fucktheddl_agent.workflow import build_agent_graph, is_smalltalk_request, to_response
 
 
 class AgentService:
@@ -17,21 +17,26 @@ class AgentService:
         self._model_gateway = model_gateway
 
     def propose(self, request: AgentRequest, user_id: str = "anonymous") -> AgentResponse:
+        smalltalk = is_smalltalk_request(request.text)
         server_disabled = (
             self._model_gateway is None
             or not self._model_gateway.settings.enabled
         )
-        if server_disabled and not request.model_api_key:
+        if server_disabled and not request.model_api_key and not smalltalk:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="请在设置中填入你的 DeepSeek API Key",
             )
         try:
-            model_extraction = self._model_gateway.extract_commitment(
-                request.text,
-                settings=_request_model_settings(request),
-                suppress_errors=not bool(request.model_api_key),
-            ) if self._model_gateway else None
+            model_extraction = (
+                None
+                if smalltalk or self._model_gateway is None
+                else self._model_gateway.extract_commitment(
+                    request.text,
+                    settings=_request_model_settings(request),
+                    suppress_errors=not bool(request.model_api_key),
+                )
+            )
         except Exception as error:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

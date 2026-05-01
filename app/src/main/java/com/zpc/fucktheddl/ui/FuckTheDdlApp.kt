@@ -57,6 +57,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -489,7 +490,7 @@ fun FuckTheDdlApp(
         }.start()
     }
 
-    LaunchedEffect(agentApiClient) {
+    LaunchedEffect(Unit) {
         refreshCommitments()
         testBackendConnection(connectionSettings)
     }
@@ -609,8 +610,11 @@ fun FuckTheDdlApp(
                     onThemeModeChanged = onThemeModeChanged,
                     onTestConnection = ::testBackendConnection,
                     onSave = { settings ->
+                        val shouldRetest = settings.serviceTestKey() != connectionSettings.serviceTestKey()
                         onConnectionSettingsSaved(settings)
-                        testBackendConnection(settings)
+                        if (shouldRetest) {
+                            testBackendConnection(settings)
+                        }
                         showingSettings = false
                     },
                     onClose = { showingSettings = false },
@@ -1147,6 +1151,16 @@ private fun ConnectionIndicator.label(): String = when (this) {
     ConnectionIndicator.Connected -> "已连接"
     ConnectionIndicator.NotConnected -> "未连接"
     ConnectionIndicator.Failed -> "连接失败"
+}
+
+private fun AgentConnectionSettings.serviceTestKey(): String {
+    return listOf(
+        baseUrl.trim(),
+        accessToken.trim(),
+        deepseekApiKey.trim(),
+        deepseekBaseUrl.trim(),
+        deepseekModel.trim(),
+    ).joinToString(separator = "\u0000")
 }
 
 private fun AppThemeMode.swatchColor(): Color = when (this) {
@@ -3032,6 +3046,9 @@ private fun VoiceInteractionOverlay(
                     null -> Unit
                 }
                 when {
+                    phase == ComposerPhase.Working -> {
+                        TextAction(text = "停止", onClick = onCancel)
+                    }
                     phase == ComposerPhase.Error -> {
                         Button(
                             onClick = onCancel,
@@ -3539,48 +3556,26 @@ private fun MicGlyph(color: Color) {
             cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx()),
             style = stroke,
         )
-        drawLine(
-            color = color,
-            start = Offset(8.dp.toPx(), 14.dp.toPx()),
-            end = Offset(8.dp.toPx(), 16.dp.toPx()),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(8.dp.toPx(), 16.dp.toPx()),
-            end = Offset(11.dp.toPx(), 22.dp.toPx()),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(11.dp.toPx(), 22.dp.toPx()),
-            end = Offset(17.dp.toPx(), 24.dp.toPx()),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(17.dp.toPx(), 24.dp.toPx()),
-            end = Offset(23.dp.toPx(), 22.dp.toPx()),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(23.dp.toPx(), 22.dp.toPx()),
-            end = Offset(26.dp.toPx(), 16.dp.toPx()),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(26.dp.toPx(), 16.dp.toPx()),
-            end = Offset(26.dp.toPx(), 14.dp.toPx()),
-            strokeWidth = strokeWidth,
-            cap = StrokeCap.Round,
-        )
+        val supportPath = Path().apply {
+            moveTo(8.dp.toPx(), 14.dp.toPx())
+            cubicTo(
+                8.dp.toPx(),
+                20.dp.toPx(),
+                11.8.dp.toPx(),
+                24.dp.toPx(),
+                17.dp.toPx(),
+                24.dp.toPx(),
+            )
+            cubicTo(
+                22.2.dp.toPx(),
+                24.dp.toPx(),
+                26.dp.toPx(),
+                20.dp.toPx(),
+                26.dp.toPx(),
+                14.dp.toPx(),
+            )
+        }
+        drawPath(path = supportPath, color = color, style = stroke)
         drawLine(
             color = color,
             start = Offset(17.dp.toPx(), 24.dp.toPx()),

@@ -35,6 +35,7 @@ class AgentGraphState(TypedDict, total=False):
     notes: str
     facts_summary: str
     validation_summary: str
+    conversation_reply: str
     proposal: dict[str, Any]
     model_extraction: dict[str, Any] | None
     commitments: dict[str, list[dict[str, Any]]]
@@ -90,6 +91,18 @@ def classify_intent(state: AgentGraphState) -> AgentGraphState:
 
 
 def _heuristic_classification(text: str) -> AgentGraphState:
+    smalltalk_reply = _smalltalk_reply(text)
+    if smalltalk_reply:
+        return {
+            "commitment_type": "suggestion",
+            "title": _smalltalk_title(text),
+            "time_range": None,
+            "date_label": None,
+            "due_label": None,
+            "priority": "medium",
+            "conversation_reply": smalltalk_reply,
+        }
+
     if any(token in text for token in ("删除", "删掉", "取消", "移除", "撤销", "去掉")):
         return {
             "commitment_type": "delete",
@@ -321,8 +334,13 @@ def draft_proposal(state: AgentGraphState) -> AgentGraphState:
         impact = "这只是查询结果，不会写入任何内容。"
     elif commitment_type == "suggestion":
         requires_confirmation = False
-        summary = _suggest_commitments(state.get("commitments", {}))
-        impact = "这是基于当前日程和待办的建议，不会自动修改任何内容。"
+        conversation_reply = state.get("conversation_reply", "")
+        summary = conversation_reply or _suggest_commitments(state.get("commitments", {}))
+        impact = (
+            "这只是回应，不会写入任何内容。"
+            if conversation_reply
+            else "这是基于当前日程和待办的建议，不会自动修改任何内容。"
+        )
     else:
         requires_confirmation = False
         summary = "这条请求还缺少关键时间或截止信息，需要先补充。"
@@ -404,6 +422,32 @@ def _looks_like_update_command(text: str) -> bool:
     if "调整" not in text:
         return False
     return any(token in text for token in ("把", "将", "日程", "待办", "时间", "改", "到"))
+
+
+def is_smalltalk_request(text: str) -> bool:
+    return bool(_smalltalk_reply(text))
+
+
+def _smalltalk_reply(text: str) -> str:
+    normalized = re.sub(r"[\s，,。.!！?？~～]+", "", text.strip().lower())
+    if not normalized:
+        return ""
+    if normalized in {"你好", "您好", "哈喽", "hello", "hi", "嗨", "在吗", "在不在"}:
+        return "我在。你可以直接说日程、待办、查询、修改或删除，我会先整理成可确认的结果，不会直接写入。"
+    if normalized in {"谢谢", "谢了", "感谢", "thankyou", "thanks"}:
+        return "不客气。你继续说下一件事就行。"
+    if normalized in {"你是谁", "你能做什么", "你可以做什么", "怎么用", "如何使用"}:
+        return "我是你的日程和待办助手。你可以直接说“明天九点上课”“周五前交报告”“取消下午的会”，我会识别后给你确认。"
+    return ""
+
+
+def _smalltalk_title(text: str) -> str:
+    normalized = re.sub(r"[\s，,。.!！?？~～]+", "", text.strip().lower())
+    if normalized in {"你是谁", "你能做什么", "你可以做什么", "怎么用", "如何使用"}:
+        return "可以这样用"
+    if normalized in {"谢谢", "谢了", "感谢", "thankyou", "thanks"}:
+        return "不客气"
+    return "我在"
 
 
 def _extract_time_range(text: str) -> str:

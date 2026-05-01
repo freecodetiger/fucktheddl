@@ -909,6 +909,63 @@ def test_query_and_suggestion_requests_return_non_write_results(tmp_path, monkey
     assert suggestion["summary"]
 
 
+def test_greeting_returns_natural_non_write_response(tmp_path, monkeypatch):
+    client = make_client(tmp_path, monkeypatch)
+
+    greeting = client.post(
+        "/agent/propose",
+        json={"text": "你好", "session_id": "smalltalk-hello"},
+    ).json()["proposal"]
+    usage = client.post(
+        "/agent/propose",
+        json={"text": "你能做什么", "session_id": "smalltalk-usage"},
+    ).json()["proposal"]
+
+    assert greeting["commitment_type"] == "suggestion"
+    assert greeting["requires_confirmation"] is False
+    assert greeting["title"] == "我在"
+    assert "我在" in greeting["summary"]
+    assert "不会直接写入" in greeting["summary"]
+    assert greeting["schedule_patch"] is None
+    assert greeting["todo_patch"] is None
+    assert usage["title"] == "可以这样用"
+    assert "日程和待办助手" in usage["summary"]
+
+
+def test_greeting_bypasses_model_extraction(tmp_path, monkeypatch):
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("RESEND_FROM_EMAIL", raising=False)
+    monkeypatch.delenv("RESEND_FROM_NAME", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://codex.example/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("FUCKTHEDDL_USE_MODEL", "true")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("smalltalk should not call model extraction")
+
+    monkeypatch.setattr(
+        "fucktheddl_agent.model_gateway.ModelGateway.extract_commitment",
+        fail_if_called,
+    )
+    app = create_app(data_root=tmp_path, job_queue=InlineAgentJobQueue())
+    client = TestClient(app)
+    token = login_test_user(client, app, "smalltalk@example.com")
+    api = AgentTestClient(client, headers={"Authorization": f"Bearer {token}"})
+
+    response = api.post(
+        "/agent/propose",
+        json={
+            "text": "你好",
+            "session_id": "smalltalk-bypass-model",
+            "model_api_key": "client-key",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["proposal"]["title"] == "我在"
+
+
 def test_query_activity_returns_visual_schedule_candidates_only(tmp_path, monkeypatch):
     monkeypatch.setenv("FUCKTHEDDL_TODAY", "2026-04-30")
     client = make_client(tmp_path, monkeypatch)
