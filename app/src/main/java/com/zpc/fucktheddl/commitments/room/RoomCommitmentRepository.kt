@@ -111,6 +111,12 @@ class RoomCommitmentRepository(
         id: String = todoId(patch),
     ): Pair<String, String> {
         val now = nowIso()
+        val existing = runCatching { dao.getTodo(ownerUserId, id) }.getOrNull()
+        val status = when {
+            patch.done == true -> "done"
+            patch.done == false -> "active"
+            else -> existing?.status ?: "active"
+        }
         dao.upsertTodo(
             TodoEntity(
                 id = id,
@@ -121,8 +127,8 @@ class RoomCommitmentRepository(
                 priority = patch.priority,
                 notes = patch.notes,
                 tags = patch.tags.joinToString(","),
-                status = "active",
-                createdAt = now,
+                status = status,
+                createdAt = existing?.createdAt ?: now,
                 updatedAt = now,
             ),
         )

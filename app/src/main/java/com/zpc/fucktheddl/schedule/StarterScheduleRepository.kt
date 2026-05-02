@@ -12,6 +12,8 @@ class StarterScheduleRepository {
             selectedTab = tabs.first(),
             events = listOf(
                 ScheduleEvent(
+                    id = "sample_event_1",
+                    date = "2026-04-30",
                     timeRange = "09:30 - 10:15",
                     title = "复盘 DDL 队列",
                     detail = "先整理紧急截止事项，再用语音快速规划。",
@@ -19,6 +21,8 @@ class StarterScheduleRepository {
                     risk = ScheduleRisk.Deadline,
                 ),
                 ScheduleEvent(
+                    id = "sample_event_2",
+                    date = "2026-05-02",
                     timeRange = "14:00 - 15:30",
                     title = "深度工作时段",
                     detail = "为当前项目保留不被打断的专注时间。",
@@ -26,6 +30,8 @@ class StarterScheduleRepository {
                     risk = ScheduleRisk.Focus,
                 ),
                 ScheduleEvent(
+                    id = "sample_event_3",
+                    date = "2026-05-02",
                     timeRange = "20:00 - 20:20",
                     title = "每日收尾",
                     detail = "确认明天第一件事和提醒设置。",
@@ -35,6 +41,8 @@ class StarterScheduleRepository {
             ),
             todos = listOf(
                 TodoItem(
+                    id = "sample_todo_1",
+                    dueDate = "2026-05-02",
                     title = "完成安卓语音外壳",
                     dueLabel = "今天截止",
                     detail = "保持第一版原生闭环可构建、可安装。",
@@ -43,16 +51,20 @@ class StarterScheduleRepository {
                     done = false,
                 ),
                 TodoItem(
+                    id = "sample_todo_2",
+                    dueDate = "2026-05-01",
                     title = "定义 JSON 补丁协议",
-                    dueLabel = "明天截止",
+                    dueLabel = "昨天截止",
                     detail = "后端写入前区分日程补丁和待办补丁。",
                     tag = "后端",
                     priority = TodoPriority.ImportantNotUrgent,
                     done = false,
                 ),
                 TodoItem(
+                    id = "sample_todo_3",
+                    dueDate = "",
                     title = "归档浏览器原型笔记",
-                    dueLabel = "本周截止",
+                    dueLabel = "无截止日期",
                     detail = "把已验证的原型决策沉淀到原生界面任务中。",
                     tag = "设计",
                     priority = TodoPriority.NotUrgentNotImportant,

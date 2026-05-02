@@ -61,6 +61,9 @@ interface CommitmentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun upsertTodo(entity: TodoEntity)
 
+    @Query("SELECT * FROM todos WHERE ownerUserId = :ownerUserId AND id = :id")
+    fun getTodo(ownerUserId: String, id: String): TodoEntity?
+
     @Query("UPDATE schedules SET status = 'cancelled', updatedAt = :updatedAt WHERE ownerUserId = :ownerUserId AND id = :id")
     fun cancelSchedule(ownerUserId: String, id: String, updatedAt: String): Int
 

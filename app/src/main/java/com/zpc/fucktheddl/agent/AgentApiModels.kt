@@ -69,6 +69,7 @@ data class AgentTodoPatch(
     val priority: String,
     val notes: String,
     val tags: List<String>,
+    val done: Boolean? = null,
 )
 
 data class AgentDeletePatch(

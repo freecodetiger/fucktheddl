@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloatAsState
@@ -15,6 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -30,9 +32,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -69,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -87,6 +92,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
@@ -102,6 +108,8 @@ import com.zpc.fucktheddl.agent.AgentProposal
 import com.zpc.fucktheddl.agent.AgentProposalCandidate
 import com.zpc.fucktheddl.agent.AgentSchedulePatch
 import com.zpc.fucktheddl.agent.AgentTodoPatch
+import com.zpc.fucktheddl.agent.AgentUpdatePatch
+import com.zpc.fucktheddl.agent.CommitmentType
 import com.zpc.fucktheddl.agent.ProposalPresentation
 import com.zpc.fucktheddl.agent.createScheduleProposal
 import com.zpc.fucktheddl.agent.createTodoProposal
@@ -155,6 +163,8 @@ private data class AppColors(
     val dangerSoft: Color,
     val success: Color,
     val successSoft: Color,
+    val amber: Color,
+    val amberSoft: Color,
     val bottomInk: Color,
     val bottomMuted: Color,
     val bottomBar: Color,
@@ -179,6 +189,8 @@ private val ClassicLightColors = AppColors(
     dangerSoft = Color(0xFFFFECEB),
     success = Color(0xFF6FA58B),
     successSoft = Color(0xFFEFF6F2),
+    amber = Color(0xFFC8832E),
+    amberSoft = Color(0xFFFFF4E6),
     bottomInk = Color(0xFF111111),
     bottomMuted = Color(0xFF8A8A8E),
     bottomBar = Color(0xFFFFFFFF),
@@ -203,6 +215,8 @@ private val DarkColors = AppColors(
     dangerSoft = Color(0xFF2C2C2E),
     success = Color(0xFFC7C7CC),
     successSoft = Color(0xFF2C2C2E),
+    amber = Color(0xFFD4913D),
+    amberSoft = Color(0xFF2C2418),
     bottomInk = Color(0xFFF5F5F7),
     bottomMuted = Color(0xFF8E8E93),
     bottomBar = Color(0xFF000000),
@@ -227,6 +241,8 @@ private val FogBlueColors = AppColors(
     dangerSoft = Color(0xFFFFEDEF),
     success = Color(0xFF6C9F91),
     successSoft = Color(0xFFEEF7F4),
+    amber = Color(0xFFC8832E),
+    amberSoft = Color(0xFFFFF4E6),
     bottomInk = Color(0xFF152233),
     bottomMuted = Color(0xFF718197),
     bottomBar = Color(0xFFFAFCFE),
@@ -272,6 +288,10 @@ private val Success: Color
     @Composable get() = LocalAppColors.current.success
 private val SuccessSoft: Color
     @Composable get() = LocalAppColors.current.successSoft
+private val Amber: Color
+    @Composable get() = LocalAppColors.current.amber
+private val AmberSoft: Color
+    @Composable get() = LocalAppColors.current.amberSoft
 private val BottomInk: Color
     @Composable get() = LocalAppColors.current.bottomInk
 private val BottomMuted: Color
@@ -312,6 +332,7 @@ private enum class SettingsPanel {
     User,
     Connection,
     Theme,
+    Statistics,
 }
 
 private enum class CreateCommitmentKind {
@@ -600,6 +621,7 @@ fun FuckTheDdlApp(
                             onEditCommitment = { target ->
                                 activeEditTarget = target
                             },
+                            onToggleTodo = { todo -> updateCommitment(todo.toggleDoneProposal()) },
                             modifier = Modifier.weight(1f),
                         )
 
@@ -621,6 +643,7 @@ fun FuckTheDdlApp(
                             onEditCommitment = { target ->
                                 activeEditTarget = target
                             },
+                            onToggleTodo = { todo -> updateCommitment(todo.toggleDoneProposal()) },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -670,6 +693,8 @@ fun FuckTheDdlApp(
                     connectionState = backendConnectionState,
                     themeMode = themeMode,
                     userEmail = userEmail.ifBlank { connectionSettings.userEmail },
+                    events = shellState.events,
+                    todos = shellState.todos,
                     onThemeModeChanged = onThemeModeChanged,
                     onTestConnection = ::testBackendConnection,
                     onSave = { settings ->
@@ -776,6 +801,8 @@ private fun ConnectionSettingsOverlay(
     connectionState: BackendConnectionState,
     themeMode: AppThemeMode,
     userEmail: String,
+    events: List<ScheduleEvent>,
+    todos: List<TodoItem>,
     onThemeModeChanged: (AppThemeMode) -> Unit,
     onTestConnection: (AgentConnectionSettings) -> Unit,
     onSave: (AgentConnectionSettings) -> Unit,
@@ -844,6 +871,7 @@ private fun ConnectionSettingsOverlay(
                             onUserClick = { panel = SettingsPanel.User },
                             onConnectionClick = { panel = SettingsPanel.Connection },
                             onThemeClick = { panel = SettingsPanel.Theme },
+                            onStatisticsClick = { panel = SettingsPanel.Statistics },
                             onClose = onClose,
                         )
 
@@ -875,6 +903,12 @@ private fun ConnectionSettingsOverlay(
                             onThemeModeChanged = onThemeModeChanged,
                             onBack = { panel = SettingsPanel.Root },
                         )
+
+                        SettingsPanel.Statistics -> StatisticsPanel(
+                            events = events,
+                            todos = todos,
+                            onBack = { panel = SettingsPanel.Root },
+                        )
                     }
                 }
             }
@@ -891,6 +925,7 @@ private fun SettingsRootMenu(
     onUserClick: () -> Unit,
     onConnectionClick: () -> Unit,
     onThemeClick: () -> Unit,
+    onStatisticsClick: () -> Unit,
     onClose: () -> Unit,
 ) {
     SettingsHeader(title = "设置")
@@ -911,6 +946,12 @@ private fun SettingsRootMenu(
         detail = themeMode.label,
         swatch = themeMode.swatchColor(),
         onClick = onThemeClick,
+    )
+    SettingsMenuRow(
+        title = "统计",
+        detail = "已完成日程与待办",
+        swatch = Success,
+        onClick = onStatisticsClick,
     )
     SettingsGroupTitle("关于")
     SettingsInfoRow(
@@ -1139,6 +1180,77 @@ private fun ThemeSettingsMenu(
         selected = themeMode == AppThemeMode.FogBlue,
         onClick = { onThemeModeChanged(AppThemeMode.FogBlue) },
     )
+}
+
+@Composable
+private fun StatisticsPanel(
+    events: List<ScheduleEvent>,
+    todos: List<TodoItem>,
+    onBack: () -> Unit,
+) {
+    val today = LocalDate.now()
+    SettingsHeader(title = "统计", onBack = onBack)
+
+    fun countCompletedSchedulesInMonth(): Int {
+        return events.count { event ->
+            runCatching { LocalDate.parse(event.date) }.getOrNull()?.let { d ->
+                d < today && d.month == today.month && d.year == today.year
+            } ?: false
+        }
+    }
+
+    fun countCompletedTodosInMonth(): Int {
+        return todos.count { todo ->
+            todo.done && runCatching { LocalDate.parse(todo.dueDate) }.getOrNull()?.let { d ->
+                d.month == today.month && d.year == today.year
+            } ?: false
+        }
+    }
+
+    val monthlySchedules = countCompletedSchedulesInMonth()
+    val monthlyTodos = countCompletedTodosInMonth()
+    val totalSchedules = events.count { event ->
+        runCatching { LocalDate.parse(event.date) }.getOrNull()?.let { it < today } ?: false
+    }
+    val totalTodos = todos.count { it.done }
+
+    SettingsGroupTitle("本月")
+    Surface(
+        color = AccentSoft.copy(alpha = 0.42f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(16.dp)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            StatItem(label = "日程", count = monthlySchedules, color = Amber)
+            StatItem(label = "待办", count = monthlyTodos, color = Success)
+        }
+    }
+
+    SettingsGroupTitle("累计")
+    Surface(
+        color = AccentSoft.copy(alpha = 0.42f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(16.dp)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            StatItem(label = "日程", count = totalSchedules, color = Amber)
+            StatItem(label = "待办", count = totalTodos, color = Success)
+        }
+    }
+}
+
+@Composable
+private fun StatItem(label: String, count: Int, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(modifier = Modifier.size(8.dp).background(color, RoundedCornerShape(999.dp)))
+        Text(text = "$label  $count 项", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    }
 }
 
 @Composable
@@ -1416,6 +1528,7 @@ private fun TodayTimeline(
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
     onEditCommitment: CommitmentEditRequester,
+    onToggleTodo: (TodoItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val today = LocalDate.now()
@@ -1425,9 +1538,9 @@ private fun TodayTimeline(
     val upcomingEvents = events
         .filterAfter(today)
         .sortedWith(compareBy<ScheduleEvent> { it.date.ifBlank { today.toString() } }.thenBy { it.timeRange })
-    val pendingTodos = todos.filterNot { it.done }
-    val homeTodos = pendingTodos
-        .sortedByDueDate()
+    val homeTodos = todos
+        .visibleForHome(today)
+        .sortedForHome(today)
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -1443,6 +1556,7 @@ private fun TodayTimeline(
             todos = homeTodos,
             onDeleteCommitment = onDeleteCommitment,
             onEditCommitment = onEditCommitment,
+            onToggleDone = onToggleTodo,
             modifier = Modifier.weight(1f),
         )
     }
@@ -1515,6 +1629,7 @@ private fun HomeTodoTimelineSection(
     todos: List<TodoItem>,
     onDeleteCommitment: (String) -> Unit,
     onEditCommitment: CommitmentEditRequester,
+    onToggleDone: (TodoItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1526,7 +1641,7 @@ private fun HomeTodoTimelineSection(
             caption = if (todos.isEmpty()) "" else "${todos.size}",
         )
         Surface(
-            color = AccentSoft.copy(alpha = 0.42f),
+            color = Panel,
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -1547,6 +1662,7 @@ private fun HomeTodoTimelineSection(
                             showConnector = index != todos.lastIndex,
                             onDelete = { onDeleteCommitment(todo.id) },
                             onEdit = onEditCommitment,
+                            onToggleDone = { onToggleDone(todo) },
                         )
                     }
                 }
@@ -1702,8 +1818,13 @@ private fun HomeTodoTimelineRow(
     showConnector: Boolean,
     onDelete: () -> Unit,
     onEdit: CommitmentEditRequester,
+    onToggleDone: (() -> Unit)? = null,
 ) {
-    val color = todo.priority.color()
+    val color = if (todo.done) Muted else todo.priority.color()
+    val today = LocalDate.now()
+    val lockOverdue = !todo.canEditOrDelete(today)
+    val allowToggle = todo.canToggle(today) && !todo.done // only toggle to done, not back (re-open via uncheck)
+    val allowToggleOff = todo.done && todo.canEditOrDelete(today) // cannot uncheck overdue done
     var expanded by remember(todo.stableUiKey(), todo.detail) { mutableStateOf(false) }
     var confirmingDelete by remember(todo.stableUiKey()) { mutableStateOf(false) }
     val hasNote = todo.detail.isNotBlank()
@@ -1711,8 +1832,8 @@ private fun HomeTodoTimelineRow(
         modifier = Modifier
             .fillMaxWidth()
             .animateContentSize(animationSpec = tween(durationMillis = 240))
-            .padding(horizontal = 12.dp, vertical = 5.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(14.dp)) {
@@ -1725,7 +1846,7 @@ private fun HomeTodoTimelineRow(
             Box(
                 modifier = Modifier
                     .size(10.dp)
-                    .border(2.dp, color, RoundedCornerShape(4.dp)),
+                    .border(2.dp, if (todo.done) Muted else color, RoundedCornerShape(4.dp)),
             )
             Box(
                 modifier = Modifier
@@ -1734,9 +1855,42 @@ private fun HomeTodoTimelineRow(
                     .background(Color(0xFFCADADD), RoundedCornerShape(999.dp)),
             )
         }
+        // Circular checkbox
+        if (onToggleDone != null && (allowToggle || allowToggleOff)) {
+            val checkColor = if (todo.done) Success else Divider
+            val checkScale by animateFloatAsState(
+                targetValue = if (todo.done) 1f else 0.3f,
+                animationSpec = spring(dampingRatio = 0.45f, stiffness = 620f),
+                label = "check-scale",
+            )
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(if (todo.done) checkColor.copy(alpha = 0.12f) else Color.Transparent)
+                    .border(1.5.dp, checkColor, CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onToggleDone() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "✓",
+                    color = Success,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = if (todo.done) 1f else 0f
+                        scaleX = checkScale
+                        scaleY = checkScale
+                    },
+                )
+            }
+        }
         Text(
             text = todo.relativeDueLabel(),
-            color = color,
+            color = if (todo.done) Muted else color,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -1746,36 +1900,42 @@ private fun HomeTodoTimelineRow(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .commitmentLongPressMenu(
-                    target = todo.editTargetOrNull(),
-                    onEdit = onEdit,
-                    onTap = { if (hasNote) expanded = !expanded },
+                .then(
+                    if (lockOverdue) Modifier
+                    else Modifier.commitmentLongPressMenu(
+                        target = todo.editTargetOrNull(),
+                        onEdit = onEdit,
+                        onTap = { if (hasNote) expanded = !expanded },
+                    )
                 ),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = todo.title,
-                    color = Ink,
+                    color = if (todo.done) Muted else Ink,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
+                    textDecoration = if (todo.done) TextDecoration.LineThrough else TextDecoration.None,
                 )
-                if (hasNote) {
+                if (hasNote && !todo.done) {
                     Text(text = if (expanded) "收起" else "备注", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                 }
             }
-            ExpandableNoteText(
-                note = todo.detail,
-                expanded = expanded,
-                collapsedMaxLines = 1,
-                fontSize = 12,
-                lineHeight = 15,
-            )
+            if (!todo.done) {
+                ExpandableNoteText(
+                    note = todo.detail,
+                    expanded = expanded,
+                    collapsedMaxLines = 1,
+                    fontSize = 12,
+                    lineHeight = 15,
+                )
+            }
         }
-        if (todo.id.isNotBlank()) {
+        if (todo.id.isNotBlank() && !lockOverdue && !todo.done) {
             ConfirmableMiniDeleteButton(
                 confirming = confirmingDelete,
                 onRequestConfirm = { confirmingDelete = true },
@@ -2779,8 +2939,10 @@ private fun CalendarSurface(
             selectedDate = selectedDate,
             onDateSelected = { selectedDate = it },
         )
+        val today = LocalDate.now()
+        val isPastDate = selectedDate < today
         val selectedEvents = events.filter { it.date == selectedDate.toString() }
-        val selectedTodos = todos.filter { it.dueDate == selectedDate.toString() && !it.done }
+        val selectedTodos = todos.filter { it.dueDate == selectedDate.toString() }
         SectionHeader(
             title = "${selectedDate.monthValue}月${selectedDate.dayOfMonth}日",
             caption = "",
@@ -2789,18 +2951,28 @@ private fun CalendarSurface(
             EmptyState(title = "—", detail = "")
         } else {
             selectedEvents.forEach { event ->
-                EventCard(
-                    event = event,
-                    onDelete = { onDeleteCommitment(event.id) },
-                    onEdit = onEditCommitment,
-                )
+                if (isPastDate) {
+                    // Overdue schedule - read only card
+                    CalendarOverdueEventRow(event = event)
+                } else {
+                    EventCard(
+                        event = event,
+                        onDelete = { onDeleteCommitment(event.id) },
+                        onEdit = onEditCommitment,
+                    )
+                }
             }
             selectedTodos.forEach { todo ->
-                TodoCard(
-                    todo = todo,
-                    onDelete = { onDeleteCommitment(todo.id) },
-                    onEdit = onEditCommitment,
-                )
+                if (isPastDate) {
+                    // Overdue todo - read only card
+                    CalendarOverdueTodoRow(todo = todo)
+                } else {
+                    TodoCard(
+                        todo = todo,
+                        onDelete = { onDeleteCommitment(todo.id) },
+                        onEdit = onEditCommitment,
+                    )
+                }
             }
         }
     }
@@ -2841,7 +3013,7 @@ private fun CalendarMonthGrid(
     onDateSelected: (LocalDate) -> Unit,
 ) {
     val eventsByDate = events.groupBy { it.date }
-    val todosByDate = todos.filterNot { it.done }.groupBy { it.dueDate }
+    val todosByDate = todos.groupBy { it.dueDate }
     val firstDay = month.atDay(1)
     val leadingBlanks = firstDay.dayOfWeek.value - 1
     val cells = List(leadingBlanks) { null } + List(month.lengthOfMonth()) { day -> month.atDay(day + 1) }
@@ -2895,11 +3067,15 @@ private fun CalendarDayCell(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val today = LocalDate.now()
     val eventCount = events.size
-    val hasDdl = todos.isNotEmpty()
-    val isToday = date == LocalDate.now()
+    val hasActiveTodo = todos.any { !it.done }
+    val hasOverdueSchedule = date != null && date < today && events.isNotEmpty()
+    val hasOverdueTodo = date != null && date < today && todos.any { !it.done }
+    val isToday = date == today
+    val isPast = date != null && date < today
     val loadColor = when {
-        hasDdl -> Danger
+        hasActiveTodo && !isPast -> Danger
         eventCount >= 4 -> Risk
         eventCount >= 2 -> Accent
         eventCount == 1 -> Success
@@ -2907,19 +3083,41 @@ private fun CalendarDayCell(
     }
     val background = when {
         selected -> AccentSoft
-        hasDdl -> DangerSoft
+        hasActiveTodo && !isPast -> DangerSoft
         eventCount >= 4 -> RiskSoft
         eventCount > 0 -> SuccessSoft
+        isPast && (hasOverdueSchedule || hasOverdueTodo) -> Canvas.copy(alpha = 0.6f)
         else -> Canvas
     }
+    val animatedBg by animateColorAsState(
+        targetValue = background,
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
+        label = "day-bg",
+    )
+    val borderTarget = if (isToday || selected) 2.dp else 0.dp
+    val animatedBorder by animateFloatAsState(
+        targetValue = if (isToday || selected) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.65f, stiffness = 450f),
+        label = "day-border",
+    )
+    val borderColor = if (hasActiveTodo && !isPast) Danger else Accent
+    val cellScale by animateFloatAsState(
+        targetValue = if (selected) 1.04f else 1f,
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = 500f),
+        label = "day-scale",
+    )
     Surface(
-        color = background,
+        color = animatedBg,
         shape = RoundedCornerShape(14.dp),
         modifier = modifier
             .height(58.dp)
+            .graphicsLayer {
+                scaleX = cellScale
+                scaleY = cellScale
+            }
             .border(
-                width = if (isToday || selected) 2.dp else 0.dp,
-                color = if (hasDdl) Danger else if (isToday || selected) Accent else Color.Transparent,
+                width = (borderTarget * animatedBorder),
+                color = borderColor.copy(alpha = animatedBorder),
                 shape = RoundedCornerShape(14.dp),
             )
             .pointerInput(date) {
@@ -2937,14 +3135,14 @@ private fun CalendarDayCell(
             ) {
                 Text(
                     text = date?.dayOfMonth?.toString().orEmpty(),
-                    color = if (date == null) Divider else loadColor,
+                    color = if (date == null) Divider else if (isPast && (hasOverdueSchedule || hasOverdueTodo)) Muted else loadColor,
                     fontSize = 13.sp,
-                    fontWeight = if (eventCount > 0 || hasDdl || isToday) FontWeight.SemiBold else FontWeight.Normal,
+                    fontWeight = if (eventCount > 0 || hasActiveTodo || isToday || (isPast && (hasOverdueSchedule || hasOverdueTodo))) FontWeight.SemiBold else FontWeight.Normal,
                 )
-                if (eventCount > 0 || hasDdl) {
+                if ((eventCount > 0 || hasActiveTodo) && !isPast) {
                     Surface(color = loadColor, shape = RoundedCornerShape(999.dp)) {
                         Text(
-                            text = if (hasDdl) "!" else eventCount.toString(),
+                            text = if (hasActiveTodo) "!" else eventCount.toString(),
                             color = readableOn(loadColor),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -2953,14 +3151,90 @@ private fun CalendarDayCell(
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                repeat(eventCount.coerceAtMost(4)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                if (hasOverdueSchedule) {
                     Box(
                         modifier = Modifier
-                            .size(5.dp)
-                            .background(loadColor, RoundedCornerShape(999.dp)),
+                            .size(6.dp)
+                            .background(Amber, RoundedCornerShape(999.dp)),
                     )
                 }
+                if (hasOverdueTodo) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(Muted.copy(alpha = 0.5f), RoundedCornerShape(999.dp)),
+                    )
+                }
+                if (!isPast) {
+                    repeat(eventCount.coerceAtMost(4)) {
+                        Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .background(loadColor, RoundedCornerShape(999.dp)),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CalendarOverdueEventRow(event: ScheduleEvent) {
+    Surface(
+        color = AmberSoft.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(modifier = Modifier.size(6.dp).background(Amber, RoundedCornerShape(999.dp)))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = event.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    text = "${event.timeRange} · 已完成",
+                    color = Muted,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CalendarOverdueTodoRow(todo: TodoItem) {
+    Surface(
+        color = if (todo.done) SuccessSoft.copy(alpha = 0.3f) else Panel.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .background(if (todo.done) Success else Muted.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = todo.title,
+                    color = if (todo.done) Muted else Ink,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    textDecoration = if (todo.done) TextDecoration.LineThrough else TextDecoration.None,
+                )
+                Text(
+                    text = if (todo.done) "已完成" else "未完成",
+                    color = if (todo.done) Success else Muted,
+                    fontSize = 12.sp,
+                )
             }
         }
     }
@@ -2975,11 +3249,14 @@ private fun TodoSurface(
 ) {
     var query by remember { mutableStateOf("") }
     val normalizedQuery = query.trim()
+    val today = LocalDate.now()
     val active = todos
+        .visibleForTodos(today)
         .filterNot { it.done }
         .filter { it.matchesTodoQuery(normalizedQuery) }
         .sortedByDueDate()
     val done = todos
+        .visibleForTodos(today)
         .filter { it.done }
         .filter { it.matchesTodoQuery(normalizedQuery) }
         .sortedByDueDate()
@@ -3184,17 +3461,21 @@ private fun TodoCard(
                 .heightIn(min = 68.dp)
                 .offset { androidx.compose.ui.unit.IntOffset(animatedOffsetX.roundToInt(), 0) }
                 .border(1.dp, Divider, RoundedCornerShape(14.dp))
-                .pointerInput(Unit) {
+                .pointerInput(todo.stableUiKey()) {
                     detectHorizontalDragGestures(
                         onDragEnd = {
-                            targetOffsetX = if (targetOffsetX < -revealWidthPx * 0.42f) {
-                                -revealWidthPx
-                            } else {
-                                0f
+                            if (!todo.done) {
+                                targetOffsetX = if (targetOffsetX < -revealWidthPx * 0.42f) {
+                                    -revealWidthPx
+                                } else {
+                                    0f
+                                }
                             }
                         },
                         onHorizontalDrag = { _, dragAmount ->
-                            targetOffsetX = (targetOffsetX + dragAmount).coerceIn(-revealWidthPx, 0f)
+                            if (!todo.done) {
+                                targetOffsetX = (targetOffsetX + dragAmount).coerceIn(-revealWidthPx, 0f)
+                            }
                         },
                     )
                 },
@@ -3352,11 +3633,19 @@ private fun EmptyState(
     title: String,
     detail: String,
 ) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(title, detail) { visible = true }
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 280),
+        label = "empty-fade",
+    )
     Surface(
         color = Panel,
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer { this.alpha = alpha }
             .border(1.dp, Divider, RoundedCornerShape(16.dp)),
     ) {
         Column(
@@ -4709,4 +4998,112 @@ private fun TodoItem.matchesTodoQuery(query: String): Boolean {
         priority.label(),
     ).joinToString(" ")
     return haystack.contains(query, ignoreCase = true)
+}
+
+// --- Overdue helpers ---
+
+private fun TodoItem.isOverdue(today: LocalDate = LocalDate.now()): Boolean {
+    if (done) return false
+    val due = runCatching { LocalDate.parse(dueDate) }.getOrNull() ?: return false
+    return due < today
+}
+
+private fun TodoItem.shouldHideFromHome(today: LocalDate = LocalDate.now()): Boolean {
+    // Hide when deadline has passed (even by 1 day), regardless of done status
+    val due = runCatching { LocalDate.parse(dueDate) }.getOrNull() ?: return false
+    // No deadline: never hide
+    if (dueDate.isBlank()) return false
+    // Done: hide the day after deadline
+    if (done) return today > due
+    // Not done: hide the day after deadline
+    return today > due
+}
+
+private fun ScheduleEvent.isOverdue(today: LocalDate = LocalDate.now()): Boolean {
+    val eventDate = runCatching { LocalDate.parse(date) }.getOrNull() ?: return false
+    return eventDate < today
+}
+
+private fun TodoItem.canToggle(today: LocalDate = LocalDate.now()): Boolean {
+    val due = runCatching { LocalDate.parse(dueDate) }.getOrNull() ?: return true
+    return due >= today
+}
+
+private fun TodoItem.canEditOrDelete(today: LocalDate = LocalDate.now()): Boolean {
+    val due = runCatching { LocalDate.parse(dueDate) }.getOrNull() ?: return true
+    return due >= today
+}
+
+private fun ScheduleEvent.canEditOrDelete(today: LocalDate = LocalDate.now()): Boolean {
+    val eventDate = runCatching { LocalDate.parse(date) }.getOrNull() ?: return true
+    return eventDate >= today
+}
+
+// --- Visibility filters ---
+
+private fun List<TodoItem>.visibleForHome(today: LocalDate = LocalDate.now()): List<TodoItem> {
+    return filterNot { it.shouldHideFromHome(today) }
+}
+
+private fun List<TodoItem>.visibleForTodos(today: LocalDate = LocalDate.now()): List<TodoItem> {
+    return filterNot { it.shouldHideFromHome(today) }
+}
+
+// --- Todo toggle ---
+
+private fun TodoItem.wasNoDeadline(): Boolean {
+    // No-deadline todos have IDs like "todo__<slug>" (empty due between underscores)
+    return id.startsWith("todo__")
+}
+
+private fun TodoItem.isExpiredDone(today: LocalDate = LocalDate.now()): Boolean {
+    if (!done) return false
+    val due = runCatching { LocalDate.parse(dueDate) }.getOrNull() ?: return false
+    return due < today
+}
+
+private fun TodoItem.toggleDoneProposal(today: LocalDate = LocalDate.now()): AgentProposal {
+    val newDone = !done
+    val effectiveDue = when {
+        dueDate.isBlank() && newDone -> today.toString()
+        !newDone && wasNoDeadline() -> ""
+        else -> dueDate
+    }
+    val patch = AgentTodoPatch(
+        title = title,
+        due = effectiveDue,
+        timezone = "Asia/Shanghai",
+        priority = priority.backendValue(),
+        notes = detail,
+        tags = listOf(tag),
+        done = newDone,
+    )
+    return AgentProposal(
+        id = "local_toggle_${id.ifBlank { title.hashCode().toString() }}",
+        commitmentType = CommitmentType.Update,
+        title = title,
+        summary = if (newDone) "完成 $title" else "重开 $title",
+        impact = if (newDone) "标记完成" else "重新打开",
+        requiresConfirmation = false,
+        todoPatch = patch,
+        updatePatch = AgentUpdatePatch(
+            targetId = id,
+            targetType = "todo",
+            targetTitle = title,
+            todoPatch = patch,
+        ),
+    )
+}
+
+private fun List<TodoItem>.sortedForHome(today: LocalDate = LocalDate.now()): List<TodoItem> {
+    // Active todos first (sorted by due), then done todos at bottom
+    val active = filterNot { it.done }.sortedWith(
+        compareBy<TodoItem> { todo ->
+            runCatching { LocalDate.parse(todo.dueDate) }.getOrNull() ?: LocalDate.MAX
+        }.thenBy { todo -> todo.priority.sortWeight() }
+    )
+    val done = filter { it.done }.sortedByDescending { todo ->
+        runCatching { LocalDate.parse(todo.dueDate) }.getOrNull() ?: LocalDate.MIN
+    }
+    return active + done
 }

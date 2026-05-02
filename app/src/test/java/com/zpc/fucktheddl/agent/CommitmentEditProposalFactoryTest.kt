@@ -46,7 +46,7 @@ class CommitmentEditProposalFactoryTest {
             dueLabel = "2026-05-01 截止",
             detail = "识别人脸表情",
             tag = "待办",
-            priority = TodoPriority.Medium,
+            priority = TodoPriority.ImportantNotUrgent,
             done = false,
         )
 
@@ -54,7 +54,7 @@ class CommitmentEditProposalFactoryTest {
             title = "完成人脸接口",
             due = "2026-05-03",
             notes = "输出后端接口文档",
-            priority = "high",
+            priority = "q1",
         )
 
         assertEquals(CommitmentType.Update, proposal.commitmentType)
@@ -62,7 +62,7 @@ class CommitmentEditProposalFactoryTest {
         assertEquals("todo", proposal.updatePatch?.targetType)
         assertEquals("完成人脸接口", proposal.todoPatch?.title)
         assertEquals("2026-05-03", proposal.todoPatch?.due)
-        assertEquals("high", proposal.todoPatch?.priority)
+        assertEquals("q1", proposal.todoPatch?.priority)
         assertEquals("输出后端接口文档", proposal.todoPatch?.notes)
     }
 }
