@@ -22,9 +22,11 @@ import com.zpc.fucktheddl.agent.LocalAgentClient
 import com.zpc.fucktheddl.agent.localAliyunAsrSession
 import com.zpc.fucktheddl.commitments.room.CommitmentDatabase
 import com.zpc.fucktheddl.commitments.room.LocalOwnerUserId
+import com.zpc.fucktheddl.commitments.room.MIGRATION_1_2
 import com.zpc.fucktheddl.commitments.room.RoomCommitmentRepository
 import com.zpc.fucktheddl.notifications.DailyReminderScheduler
 import com.zpc.fucktheddl.notifications.DailyReminderSettingsStore
+import com.zpc.fucktheddl.quests.RoomQuestRepository
 import com.zpc.fucktheddl.schedule.StarterScheduleRepository
 import com.zpc.fucktheddl.ui.AppThemeMode
 import com.zpc.fucktheddl.ui.FuckTheDdlApp
@@ -44,8 +46,9 @@ class MainActivity : ComponentActivity() {
             applicationContext,
             CommitmentDatabase::class.java,
             "fucktheddl_commitments.db",
-        ).build()
+        ).addMigrations(MIGRATION_1_2).build()
         val commitmentRepository = RoomCommitmentRepository(commitmentDatabase)
+        val questRepository = RoomQuestRepository(commitmentDatabase)
         val settingsStore = AgentSettingsStore(this)
         val reminderSettingsStore = DailyReminderSettingsStore(this)
         val reminderScheduler = DailyReminderScheduler(this)
@@ -86,6 +89,16 @@ class MainActivity : ComponentActivity() {
                     commitmentsProvider = { commitmentRepository.listCommitments(LocalOwnerUserId) },
                     proposalApplier = { proposal -> commitmentRepository.applyProposal(LocalOwnerUserId, proposal) },
                     commitmentDeleter = { commitmentId -> commitmentRepository.deleteCommitment(LocalOwnerUserId, commitmentId) },
+                    questBooksProvider = { kind -> questRepository.listBooks(kind) },
+                    questTreeProvider = { bookId -> questRepository.getBookTree(bookId) },
+                    questBookCreator = { kind, title, description, location, targetDate ->
+                        questRepository.createBook(kind, title, description, location, targetDate)
+                    },
+                    questBookUpdater = { book -> questRepository.updateBook(book) },
+                    questBookDeleter = { bookId -> questRepository.deleteBook(bookId) },
+                    questNodeCreator = { bookId, parentId, title -> questRepository.createNode(bookId, parentId, title) },
+                    questNodeUpdater = { node -> questRepository.updateNode(node) },
+                    questNodeDeleter = { nodeId -> questRepository.deleteNode(nodeId) },
                     onConnectionSettingsSaved = { settings ->
                         settingsStore.save(settings)
                         connectionSettings = settings

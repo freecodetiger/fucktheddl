@@ -121,6 +121,10 @@ import com.zpc.fucktheddl.agent.presentation
 import com.zpc.fucktheddl.agent.toScheduleUpdateProposal
 import com.zpc.fucktheddl.agent.toTodoUpdateProposal
 import com.zpc.fucktheddl.notifications.DailyReminderSettings
+import com.zpc.fucktheddl.quests.QuestBook
+import com.zpc.fucktheddl.quests.QuestBookKind
+import com.zpc.fucktheddl.quests.QuestBookTree
+import com.zpc.fucktheddl.quests.QuestNode
 import com.zpc.fucktheddl.schedule.ScheduleEvent
 import com.zpc.fucktheddl.schedule.ScheduleRisk
 import com.zpc.fucktheddl.schedule.ScheduleShellState
@@ -352,6 +356,7 @@ internal enum class WorkspacePage(val index: Int) {
     Calendar(0),
     Today(1),
     Todo(2),
+    Quest(3),
 }
 
 private enum class ConnectionIndicator {
@@ -414,6 +419,21 @@ private data class EditableProposalDraft(
         return proposal
     }
 }
+
+private data class QuestVisibleNode(
+    val node: QuestNode,
+    val depth: Int,
+    val childCount: Int,
+)
+
+private data class QuestBookEditorState(
+    val kind: QuestBookKind,
+    val book: QuestBook? = null,
+)
+
+private data class QuestNodeEditorState(
+    val node: QuestNode,
+)
 
 internal fun buildVoiceRefinementPrompt(
     originalText: String,
@@ -533,8 +553,12 @@ internal fun settleWorkspacePage(
         totalDragX > thresholdPx -> currentPage.index - 1
         totalDragX < -thresholdPx -> currentPage.index + 1
         else -> currentPage.index
-    }.coerceIn(WorkspacePage.Calendar.index, WorkspacePage.Todo.index)
+    }.coerceIn(WorkspacePage.Calendar.index, WorkspacePage.Quest.index)
     return WorkspacePage.values().first { it.index == targetIndex }
+}
+
+internal fun shouldShowQuestEdgeHint(currentPage: WorkspacePage): Boolean {
+    return currentPage == WorkspacePage.Todo
 }
 
 @Composable
@@ -549,6 +573,18 @@ fun FuckTheDdlApp(
     commitmentsProvider: () -> AgentCommitmentsPayload = { AgentCommitmentsPayload(emptyList(), emptyList()) },
     proposalApplier: (AgentProposal) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
     commitmentDeleter: (String) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
+    questBooksProvider: (QuestBookKind) -> List<QuestBook> = { emptyList() },
+    questTreeProvider: (String) -> QuestBookTree? = { null },
+    questBookCreator: (QuestBookKind, String, String, String, String) -> QuestBook = { kind, title, description, location, targetDate ->
+        QuestBook("", kind, title, description, location, targetDate, false, "", "")
+    },
+    questBookUpdater: (QuestBook) -> QuestBook = { it },
+    questBookDeleter: (String) -> Unit = {},
+    questNodeCreator: (String, String?, String) -> QuestNode = { bookId, parentId, title ->
+        QuestNode("", bookId, parentId, title, "", "", "", false, true, 0, "", "")
+    },
+    questNodeUpdater: (QuestNode) -> QuestNode = { it },
+    questNodeDeleter: (String) -> Unit = {},
     onConnectionSettingsSaved: (AgentConnectionSettings) -> Unit = {},
     onThemeModeChanged: (AppThemeMode) -> Unit = {},
     onDailyReminderSettingsChanged: (DailyReminderSettings) -> Unit = {},
@@ -579,6 +615,9 @@ fun FuckTheDdlApp(
     var activeCreateKind by remember { mutableStateOf<CreateCommitmentKind?>(null) }
     var voiceRecording by remember { mutableStateOf(false) }
     var backendConnectionState by remember { mutableStateOf(BackendConnectionState()) }
+    var questKind by remember { mutableStateOf(QuestBookKind.Main) }
+    var questBooks by remember { mutableStateOf<List<QuestBook>>(emptyList()) }
+    var activeQuestTree by remember { mutableStateOf<QuestBookTree?>(null) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun testLocalServices(settings: AgentConnectionSettings) {
@@ -614,6 +653,70 @@ fun FuckTheDdlApp(
                     backendConnectionState = BackendConnectionState(
                         indicator = ConnectionIndicator.Failed,
                         label = error.message?.takeIf { it.isNotBlank() } ?: "本地读取失败",
+                    )
+                }
+            }
+        }.start()
+    }
+
+    fun refreshQuestBooks(kind: QuestBookKind = questKind) {
+        Thread {
+            runCatching {
+                questBooksProvider(kind)
+            }.onSuccess { books ->
+                mainHandler.post {
+                    questBooks = books
+                    activeQuestTree?.let { tree ->
+                        if (books.none { it.id == tree.book.id }) {
+                            activeQuestTree = null
+                        }
+                    }
+                }
+            }.onFailure { error ->
+                mainHandler.post {
+                    backendConnectionState = BackendConnectionState(
+                        indicator = ConnectionIndicator.Failed,
+                        label = error.message?.takeIf { it.isNotBlank() } ?: "任务书读取失败",
+                    )
+                }
+            }
+        }.start()
+    }
+
+    fun refreshQuestTree(bookId: String) {
+        Thread {
+            runCatching {
+                questTreeProvider(bookId)
+            }.onSuccess { tree ->
+                mainHandler.post {
+                    activeQuestTree = tree
+                }
+            }.onFailure { error ->
+                mainHandler.post {
+                    backendConnectionState = BackendConnectionState(
+                        indicator = ConnectionIndicator.Failed,
+                        label = error.message?.takeIf { it.isNotBlank() } ?: "任务树读取失败",
+                    )
+                }
+            }
+        }.start()
+    }
+
+    fun runQuestMutation(
+        action: () -> Unit,
+        refreshBookId: String? = activeQuestTree?.book?.id,
+    ) {
+        Thread {
+            runCatching {
+                action()
+            }.onSuccess {
+                refreshQuestBooks()
+                refreshBookId?.let { refreshQuestTree(it) }
+            }.onFailure { error ->
+                mainHandler.post {
+                    backendConnectionState = BackendConnectionState(
+                        indicator = ConnectionIndicator.Failed,
+                        label = error.message?.takeIf { it.isNotBlank() } ?: "任务书保存失败",
                     )
                 }
             }
@@ -661,6 +764,7 @@ fun FuckTheDdlApp(
 
     LaunchedEffect(Unit) {
         refreshCommitments()
+        refreshQuestBooks()
         backendConnectionState = connectionSettings.localConfigState()
     }
 
@@ -669,6 +773,7 @@ fun FuckTheDdlApp(
             containerColor = Canvas,
             bottomBar = {
                 BottomWorkspace(
+                    currentPage = workspacePage,
                     selectedTab = selectedTab,
                     onTodaySelected = {
                         workspacePage = WorkspacePage.Today
@@ -706,6 +811,58 @@ fun FuckTheDdlApp(
                         currentPage = workspacePage,
                         events = shellState.events,
                         todos = shellState.todos,
+                        questKind = questKind,
+                        questBooks = questBooks,
+                        activeQuestTree = activeQuestTree,
+                        onQuestKindChange = { kind ->
+                            questKind = kind
+                            activeQuestTree = null
+                            refreshQuestBooks(kind)
+                        },
+                        onQuestBookOpen = { book ->
+                            refreshQuestTree(book.id)
+                        },
+                        onQuestBookClose = {
+                            activeQuestTree = null
+                            refreshQuestBooks()
+                        },
+                        onQuestBookCreate = { kind, title, description, location, targetDate ->
+                            runQuestMutation(
+                                action = { questBookCreator(kind, title, description, location, targetDate) },
+                                refreshBookId = null,
+                            )
+                        },
+                        onQuestBookUpdate = { book ->
+                            runQuestMutation(
+                                action = { questBookUpdater(book) },
+                                refreshBookId = book.id,
+                            )
+                        },
+                        onQuestBookDelete = { book ->
+                            activeQuestTree = null
+                            runQuestMutation(
+                                action = { questBookDeleter(book.id) },
+                                refreshBookId = null,
+                            )
+                        },
+                        onQuestNodeCreate = { bookId, parentId, title ->
+                            runQuestMutation(
+                                action = { questNodeCreator(bookId, parentId, title) },
+                                refreshBookId = bookId,
+                            )
+                        },
+                        onQuestNodeUpdate = { node ->
+                            runQuestMutation(
+                                action = { questNodeUpdater(node) },
+                                refreshBookId = node.bookId,
+                            )
+                        },
+                        onQuestNodeDelete = { node ->
+                            runQuestMutation(
+                                action = { questNodeDeleter(node.id) },
+                                refreshBookId = node.bookId,
+                            )
+                        },
                         onDeleteCommitment = ::deleteCommitment,
                         onEditCommitment = { target ->
                             activeEditTarget = target
@@ -715,6 +872,14 @@ fun FuckTheDdlApp(
                             workspacePage = page
                         },
                         modifier = Modifier.weight(1f),
+                    )
+                }
+                if (shouldShowQuestEdgeHint(workspacePage) && !voiceRecording && !showingSettings && activeEditTarget == null && activeCreateKind == null) {
+                    QuestEdgeHint(
+                        onClick = { workspacePage = WorkspacePage.Quest },
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 0.dp),
                     )
                 }
                 activeEditTarget?.let { target ->
@@ -1714,6 +1879,18 @@ private fun WorkspacePager(
     currentPage: WorkspacePage,
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
+    questKind: QuestBookKind,
+    questBooks: List<QuestBook>,
+    activeQuestTree: QuestBookTree?,
+    onQuestKindChange: (QuestBookKind) -> Unit,
+    onQuestBookOpen: (QuestBook) -> Unit,
+    onQuestBookClose: () -> Unit,
+    onQuestBookCreate: (QuestBookKind, String, String, String, String) -> Unit,
+    onQuestBookUpdate: (QuestBook) -> Unit,
+    onQuestBookDelete: (QuestBook) -> Unit,
+    onQuestNodeCreate: (String, String?, String) -> Unit,
+    onQuestNodeUpdate: (QuestNode) -> Unit,
+    onQuestNodeDelete: (QuestNode) -> Unit,
     onDeleteCommitment: (String) -> Unit,
     onEditCommitment: CommitmentEditRequester,
     onToggleTodo: (TodoItem) -> Unit,
@@ -1746,7 +1923,7 @@ private fun WorkspacePager(
         }
     }
     val pageOffsetX = (trackOffsetX.value + animatedDragOffsetX)
-        .coerceIn(-WorkspacePage.Todo.index * widthPx, 0f)
+        .coerceIn(-WorkspacePage.Quest.index * widthPx, 0f)
 
     Box(
         modifier = modifier
@@ -1771,7 +1948,7 @@ private fun WorkspacePager(
                     onHorizontalDrag = { change, dragAmount ->
                         val canMoveTrack = dragOffsetX != 0f ||
                             (dragAmount > 0f && currentPage.index > WorkspacePage.Calendar.index) ||
-                            (dragAmount < 0f && currentPage.index < WorkspacePage.Todo.index)
+                            (dragAmount < 0f && currentPage.index < WorkspacePage.Quest.index)
                         if (!canMoveTrack) {
                             return@detectHorizontalDragGestures
                         }
@@ -1803,6 +1980,21 @@ private fun WorkspacePager(
                     onDeleteCommitment = onDeleteCommitment,
                     onEditCommitment = onEditCommitment,
                     modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                )
+                WorkspacePage.Quest -> QuestSurface(
+                    selectedKind = questKind,
+                    books = questBooks,
+                    activeTree = activeQuestTree,
+                    onKindChange = onQuestKindChange,
+                    onBookOpen = onQuestBookOpen,
+                    onBookClose = onQuestBookClose,
+                    onBookCreate = onQuestBookCreate,
+                    onBookUpdate = onQuestBookUpdate,
+                    onBookDelete = onQuestBookDelete,
+                    onNodeCreate = onQuestNodeCreate,
+                    onNodeUpdate = onQuestNodeUpdate,
+                    onNodeDelete = onQuestNodeDelete,
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
             return@Box
@@ -1851,7 +2043,737 @@ private fun WorkspacePager(
                 }
                 .verticalScroll(rememberScrollState()),
         )
+        QuestSurface(
+            selectedKind = questKind,
+            books = questBooks,
+            activeTree = activeQuestTree,
+            onKindChange = onQuestKindChange,
+            onBookOpen = onQuestBookOpen,
+            onBookClose = onQuestBookClose,
+            onBookCreate = onQuestBookCreate,
+            onBookUpdate = onQuestBookUpdate,
+            onBookDelete = onQuestBookDelete,
+            onNodeCreate = onQuestNodeCreate,
+            onNodeUpdate = onQuestNodeUpdate,
+            onNodeDelete = onQuestNodeDelete,
+            modifier = Modifier
+                .fillMaxSize()
+                .offset {
+                    IntOffset(
+                        x = (WorkspacePage.Quest.index * widthPx + pageOffsetX).roundToInt(),
+                        y = 0,
+                    )
+                },
+        )
     }
+}
+
+@Composable
+private fun QuestEdgeHint(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val pulse = rememberInfiniteTransition(label = "quest-edge-pulse")
+    val alpha by pulse.animateFloat(
+        initialValue = 0.42f,
+        targetValue = 0.72f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1300),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "quest-edge-alpha",
+    )
+    Box(
+        modifier = modifier
+            .width(18.dp)
+            .height(78.dp)
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.96f),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "›",
+                color = Amber.copy(alpha = 0.34f * alpha),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.offset(x = (-1).dp),
+            )
+            Text(
+                text = "›",
+                color = Amber.copy(alpha = 0.34f * alpha),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.offset(x = (-1).dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuestSurface(
+    selectedKind: QuestBookKind,
+    books: List<QuestBook>,
+    activeTree: QuestBookTree?,
+    onKindChange: (QuestBookKind) -> Unit,
+    onBookOpen: (QuestBook) -> Unit,
+    onBookClose: () -> Unit,
+    onBookCreate: (QuestBookKind, String, String, String, String) -> Unit,
+    onBookUpdate: (QuestBook) -> Unit,
+    onBookDelete: (QuestBook) -> Unit,
+    onNodeCreate: (String, String?, String) -> Unit,
+    onNodeUpdate: (QuestNode) -> Unit,
+    onNodeDelete: (QuestNode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var bookEditor by remember { mutableStateOf<QuestBookEditorState?>(null) }
+    var nodeEditor by remember { mutableStateOf<QuestNodeEditorState?>(null) }
+    var deleteBookCandidate by remember { mutableStateOf<QuestBook?>(null) }
+    var deleteNodeCandidate by remember { mutableStateOf<QuestNode?>(null) }
+    var quickAddParentId by remember(activeTree?.book?.id) { mutableStateOf<String?>(null) }
+    var quickTitle by remember(activeTree?.book?.id, quickAddParentId) { mutableStateOf("") }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        if (activeTree == null) {
+            QuestBookshelf(
+                selectedKind = selectedKind,
+                books = books,
+                onKindChange = onKindChange,
+                onBookOpen = onBookOpen,
+                onCreateBook = { bookEditor = QuestBookEditorState(selectedKind) },
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            )
+        } else {
+            QuestTreeBook(
+                tree = activeTree,
+                quickAddParentId = quickAddParentId,
+                quickTitle = quickTitle,
+                onQuickTitleChange = { quickTitle = it },
+                onBack = onBookClose,
+                onEditBook = { bookEditor = QuestBookEditorState(activeTree.book.kind, activeTree.book) },
+                onDeleteBook = { deleteBookCandidate = activeTree.book },
+                onSetQuickParent = { quickAddParentId = it },
+                onQuickAdd = {
+                    val title = quickTitle.trim()
+                    if (title.isNotBlank()) {
+                        onNodeCreate(activeTree.book.id, quickAddParentId, title)
+                        quickTitle = ""
+                    }
+                },
+                onToggleNode = { node -> onNodeUpdate(node.copy(done = !node.done)) },
+                onToggleExpanded = { node -> onNodeUpdate(node.copy(expanded = !node.expanded)) },
+                onEditNode = { nodeEditor = QuestNodeEditorState(it) },
+                onDeleteNode = { deleteNodeCandidate = it },
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            )
+        }
+        bookEditor?.let { editor ->
+            QuestBookEditorOverlay(
+                state = editor,
+                onDismiss = { bookEditor = null },
+                onSave = { title, description, location, targetDate ->
+                    val book = editor.book
+                    if (book == null) {
+                        onBookCreate(editor.kind, title, description, location, targetDate)
+                    } else {
+                        onBookUpdate(
+                            book.copy(
+                                title = title.trim().ifBlank { book.title },
+                                description = description.trim(),
+                                location = location.trim(),
+                                targetDate = targetDate.trim(),
+                            ),
+                        )
+                    }
+                    bookEditor = null
+                },
+            )
+        }
+        nodeEditor?.let { editor ->
+            QuestNodeEditorOverlay(
+                node = editor.node,
+                onDismiss = { nodeEditor = null },
+                onSave = { title, description, location, targetDate ->
+                    onNodeUpdate(
+                        editor.node.copy(
+                            title = title.trim().ifBlank { editor.node.title },
+                            description = description.trim(),
+                            location = location.trim(),
+                            targetDate = targetDate.trim(),
+                        ),
+                    )
+                    nodeEditor = null
+                },
+            )
+        }
+        deleteBookCandidate?.let { book ->
+            QuestDeleteConfirmOverlay(
+                title = "删除任务书",
+                message = "会删除「${book.title}」和里面的所有小目标。",
+                onDismiss = { deleteBookCandidate = null },
+                onConfirm = {
+                    onBookDelete(book)
+                    deleteBookCandidate = null
+                },
+            )
+        }
+        deleteNodeCandidate?.let { node ->
+            QuestDeleteConfirmOverlay(
+                title = "删除小目标",
+                message = "会删除「${node.title}」和它下面的所有子目标。",
+                onDismiss = { deleteNodeCandidate = null },
+                onConfirm = {
+                    onNodeDelete(node)
+                    deleteNodeCandidate = null
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuestBookshelf(
+    selectedKind: QuestBookKind,
+    books: List<QuestBook>,
+    onKindChange: (QuestBookKind) -> Unit,
+    onBookOpen: (QuestBook) -> Unit,
+    onCreateBook: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            QuestKindChip(
+                label = "主线",
+                selected = selectedKind == QuestBookKind.Main,
+                onClick = { onKindChange(QuestBookKind.Main) },
+                modifier = Modifier.weight(1f),
+            )
+            QuestKindChip(
+                label = "支线",
+                selected = selectedKind == QuestBookKind.Side,
+                onClick = { onKindChange(QuestBookKind.Side) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(text = "任务书架", color = Ink, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = "${selectedKind.label}任务，每本书都是一棵独立目标树", color = Muted, fontSize = 13.sp)
+            }
+            Button(
+                onClick = hapticClick(onClick = onCreateBook),
+                colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Text("+ 新书", color = readableOn(Ink), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        if (books.isEmpty()) {
+            EmptyState(
+                title = if (selectedKind == QuestBookKind.Main) "还没有主线任务书" else "还没有支线任务书",
+                detail = "创建一本书，把长期追求拆成可以不断展开的小目标。",
+            )
+        } else {
+            books.forEach { book ->
+                QuestBookCard(book = book, onOpen = { onBookOpen(book) })
+            }
+        }
+        Box(modifier = Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun QuestKindChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = if (selected) Ink else AccentSoft,
+        shape = RoundedCornerShape(999.dp),
+        modifier = modifier
+            .height(42.dp)
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.97f),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                color = if (selected) readableOn(Ink) else Accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuestBookCard(
+    book: QuestBook,
+    onOpen: () -> Unit,
+) {
+    val accent = if (book.kind == QuestBookKind.Main) Amber else Success
+    Surface(
+        color = Panel,
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(18.dp))
+            .pressFeedbackClick(onClick = onOpen, pressedScale = 0.98f),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(color = accent.copy(alpha = 0.16f), shape = RoundedCornerShape(14.dp)) {
+                Box(modifier = Modifier.size(width = 46.dp, height = 58.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = if (book.kind == QuestBookKind.Main) "主" else "支",
+                        color = accent,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(text = book.title, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                QuestMetaLine(location = book.location, targetDate = book.targetDate)
+                if (book.description.isNotBlank()) {
+                    Text(text = book.description, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 17.sp)
+                }
+            }
+            Text(text = "›", color = Muted, fontSize = 24.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun QuestTreeBook(
+    tree: QuestBookTree,
+    quickAddParentId: String?,
+    quickTitle: String,
+    onQuickTitleChange: (String) -> Unit,
+    onBack: () -> Unit,
+    onEditBook: () -> Unit,
+    onDeleteBook: () -> Unit,
+    onSetQuickParent: (String?) -> Unit,
+    onQuickAdd: () -> Unit,
+    onToggleNode: (QuestNode) -> Unit,
+    onToggleExpanded: (QuestNode) -> Unit,
+    onEditNode: (QuestNode) -> Unit,
+    onDeleteNode: (QuestNode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val visibleRows = remember(tree.nodes) { visibleQuestRows(tree.nodes) }
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        SettingsHeader(title = tree.book.title, onBack = onBack)
+        Surface(
+            color = Panel,
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(20.dp)),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "${tree.book.kind.label}任务书", color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(text = "${tree.completedNodeCount}/${tree.totalNodeCount}", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                }
+                QuestMetaLine(location = tree.book.location, targetDate = tree.book.targetDate)
+                if (tree.book.description.isNotBlank()) {
+                    Text(text = tree.book.description, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                Surface(color = Divider, shape = RoundedCornerShape(999.dp), modifier = Modifier.fillMaxWidth().height(8.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(tree.progress.coerceIn(0f, 1f))
+                            .background(Amber, RoundedCornerShape(999.dp)),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextAction(text = "编辑书", onClick = onEditBook)
+                    TextAction(text = "删除书", color = Danger, onClick = onDeleteBook)
+                }
+            }
+        }
+        QuickQuestAddRow(
+            parentLabel = quickAddParentId?.let { id -> tree.nodes.firstOrNull { it.id == id }?.title } ?: "顶层目标",
+            title = quickTitle,
+            onTitleChange = onQuickTitleChange,
+            onSubmit = onQuickAdd,
+            onTopLevel = { onSetQuickParent(null) },
+        )
+        if (visibleRows.isEmpty()) {
+            EmptyState(title = "这本书还没有目标", detail = "先添加一个顶层目标，再继续拆成子目标。")
+        } else {
+            visibleRows.forEach { row ->
+                QuestNodeRow(
+                    row = row,
+                    onToggleDone = { onToggleNode(row.node) },
+                    onToggleExpanded = { onToggleExpanded(row.node) },
+                    onAddChild = { onSetQuickParent(row.node.id) },
+                    onEdit = { onEditNode(row.node) },
+                    onDelete = { onDeleteNode(row.node) },
+                )
+            }
+        }
+        Box(modifier = Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun QuickQuestAddRow(
+    parentLabel: String,
+    title: String,
+    onTitleChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onTopLevel: () -> Unit,
+) {
+    Surface(
+        color = AccentSoft.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(18.dp)),
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(text = "添加到：$parentLabel", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TextAction(text = "顶层", onClick = onTopLevel)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = onTitleChange,
+                    placeholder = { Text("快速写下一个小目标", fontSize = 13.sp) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = appTextFieldColors(),
+                    modifier = Modifier.weight(1f),
+                )
+                Button(
+                    onClick = hapticClick(onClick = onSubmit),
+                    enabled = title.trim().isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(52.dp),
+                ) {
+                    Text("+", color = readableOn(Ink), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuestNodeRow(
+    row: QuestVisibleNode,
+    onToggleDone: () -> Unit,
+    onToggleExpanded: () -> Unit,
+    onAddChild: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val node = row.node
+    val indent = (row.depth * 18).coerceAtMost(72).dp
+    Surface(
+        color = if (node.done) SuccessSoft.copy(alpha = 0.62f) else Panel,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = indent)
+            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = if (row.childCount > 0) {
+                        if (node.expanded) "⌄" else "›"
+                    } else {
+                        "•"
+                    },
+                    color = Muted,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .pressFeedbackClick(
+                            onClick = if (row.childCount > 0) onToggleExpanded else ({ }),
+                            pressedScale = 0.9f,
+                        ),
+                    textAlign = TextAlign.Center,
+                )
+                Surface(
+                    color = if (node.done) Success else Color.Transparent,
+                    shape = RoundedCornerShape(999.dp),
+                    modifier = Modifier
+                        .size(24.dp)
+                        .border(1.5.dp, if (node.done) Success else Muted, RoundedCornerShape(999.dp))
+                        .pressFeedbackClick(onClick = onToggleDone, pressedScale = 0.88f),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        if (node.done) {
+                            Text("✓", color = readableOn(Success), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = node.title,
+                        color = if (node.done) Muted else Ink,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textDecoration = if (node.done) TextDecoration.LineThrough else TextDecoration.None,
+                    )
+                    QuestMetaLine(location = node.location, targetDate = node.targetDate)
+                }
+            }
+            if (node.description.isNotBlank()) {
+                Text(text = node.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextAction(text = "+ 子目标", onClick = onAddChild)
+                TextAction(text = "编辑", onClick = onEdit)
+                TextAction(text = "删除", color = Danger, onClick = onDelete)
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuestMetaLine(
+    location: String,
+    targetDate: String,
+) {
+    val parts = listOfNotNull(
+        location.takeIf { it.isNotBlank() }?.let { "地点 $it" },
+        targetDate.takeIf { it.isNotBlank() }?.let { "预期 $it" },
+    )
+    if (parts.isNotEmpty()) {
+        Text(
+            text = parts.joinToString("  ·  "),
+            color = Muted,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun QuestBookEditorOverlay(
+    state: QuestBookEditorState,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String, String) -> Unit,
+) {
+    QuestFieldsOverlay(
+        title = if (state.book == null) "新建${state.kind.label}任务书" else "编辑任务书",
+        initialTitle = state.book?.title.orEmpty(),
+        initialDescription = state.book?.description.orEmpty(),
+        initialLocation = state.book?.location.orEmpty(),
+        initialTargetDate = state.book?.targetDate.orEmpty(),
+        onDismiss = onDismiss,
+        onSave = onSave,
+    )
+}
+
+@Composable
+private fun QuestNodeEditorOverlay(
+    node: QuestNode,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String, String) -> Unit,
+) {
+    QuestFieldsOverlay(
+        title = "编辑小目标",
+        initialTitle = node.title,
+        initialDescription = node.description,
+        initialLocation = node.location,
+        initialTargetDate = node.targetDate,
+        onDismiss = onDismiss,
+        onSave = onSave,
+    )
+}
+
+@Composable
+private fun QuestFieldsOverlay(
+    title: String,
+    initialTitle: String,
+    initialDescription: String,
+    initialLocation: String,
+    initialTargetDate: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String, String, String) -> Unit,
+) {
+    var questTitle by remember(initialTitle) { mutableStateOf(initialTitle) }
+    var description by remember(initialDescription) { mutableStateOf(initialDescription) }
+    var location by remember(initialLocation) { mutableStateOf(initialLocation) }
+    var targetDate by remember(initialTargetDate) { mutableStateOf(initialTargetDate) }
+    Popup(
+        alignment = Alignment.Center,
+        properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true),
+        onDismissRequest = onDismiss,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Canvas.copy(alpha = 0.72f))
+                .padding(horizontal = 20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                color = Panel,
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 18.dp,
+                modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(24.dp)),
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SettingsHeader(title = title)
+                    OutlinedTextField(
+                        value = questTitle,
+                        onValueChange = { questTitle = it },
+                        label = { Text("标题", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appTextFieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("描述", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appTextFieldColors(),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp),
+                    )
+                    OutlinedTextField(
+                        value = location,
+                        onValueChange = { location = it },
+                        label = { Text("地点", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appTextFieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = targetDate,
+                        onValueChange = { targetDate = it },
+                        label = { Text("预期达成时间（可不填）", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appTextFieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = hapticClick(onClick = onDismiss),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.weight(1f).height(50.dp),
+                        ) {
+                            Text("取消", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Button(
+                            onClick = hapticClick(onClick = { onSave(questTitle, description, location, targetDate) }),
+                            enabled = questTitle.trim().isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.weight(1f).height(50.dp),
+                        ) {
+                            Text("保存", color = readableOn(Ink), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuestDeleteConfirmOverlay(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Popup(
+        alignment = Alignment.Center,
+        properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true),
+        onDismissRequest = onDismiss,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Canvas.copy(alpha = 0.72f))
+                .padding(horizontal = 24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                color = Panel,
+                shape = RoundedCornerShape(22.dp),
+                shadowElevation = 18.dp,
+                modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(22.dp)),
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(text = title, color = Ink, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                    Text(text = message, color = Muted, fontSize = 14.sp, lineHeight = 20.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = hapticClick(onClick = onDismiss),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.weight(1f).height(50.dp),
+                        ) {
+                            Text("取消", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Button(
+                            onClick = hapticClick(onClick = onConfirm),
+                            colors = ButtonDefaults.buttonColors(containerColor = Danger),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.weight(1f).height(50.dp),
+                        ) {
+                            Text("删除", color = readableOn(Danger), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun visibleQuestRows(nodes: List<QuestNode>): List<QuestVisibleNode> {
+    val byParent = nodes.groupBy { it.parentId }
+    val result = mutableListOf<QuestVisibleNode>()
+
+    fun visit(parentId: String?, depth: Int) {
+        byParent[parentId]
+            .orEmpty()
+            .sortedWith(compareBy<QuestNode> { it.sortOrder }.thenBy { it.createdAt })
+            .forEach { node ->
+                val childCount = byParent[node.id].orEmpty().size
+                result += QuestVisibleNode(node = node, depth = depth, childCount = childCount)
+                if (node.expanded) {
+                    visit(node.id, depth + 1)
+                }
+            }
+    }
+
+    visit(parentId = null, depth = 0)
+    return result
 }
 
 @Composable
@@ -3989,6 +4911,7 @@ private fun EmptyState(
 
 @Composable
 private fun BottomWorkspace(
+    currentPage: WorkspacePage,
     selectedTab: ScheduleTab,
     onTodaySelected: () -> Unit,
     onTodoSelected: () -> Unit,
@@ -4016,6 +4939,7 @@ private fun BottomWorkspace(
                     .background(Divider),
             )
             VoiceAgentDock(
+                currentPage = currentPage,
                 selectedTab = selectedTab,
                 onTodaySelected = onTodaySelected,
                 onTodoSelected = onTodoSelected,
@@ -4035,6 +4959,7 @@ private fun BottomWorkspace(
 
 @Composable
 private fun VoiceAgentDock(
+    currentPage: WorkspacePage,
     selectedTab: ScheduleTab,
     onTodaySelected: () -> Unit,
     onTodoSelected: () -> Unit,
@@ -4060,6 +4985,7 @@ private fun VoiceAgentDock(
     var conversationSessionId by remember { mutableStateOf(newVoiceConversationSessionId()) }
     val hasModelApiKey = connectionSettings.deepseekApiKey.isNotBlank()
     val hasAsrApiKey = connectionSettings.aliyunApiKey.isNotBlank()
+    val voiceAvailableOnPage = currentPage != WorkspacePage.Quest
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     LaunchedEffect(isListening) {
         onVoiceRecordingChanged(isListening)
@@ -4301,10 +5227,12 @@ private fun VoiceAgentDock(
             )
         }
         BottomVoiceNav(
+            currentPage = currentPage,
             selectedTab = selectedTab,
             onTodaySelected = onTodaySelected,
             onTodoSelected = onTodoSelected,
             voiceEnabled = asrClient != null &&
+                voiceAvailableOnPage &&
                 hasModelApiKey &&
                 hasAsrApiKey &&
                 phase != ComposerPhase.Working &&
@@ -4825,11 +5753,12 @@ private fun appTextFieldColors() = OutlinedTextFieldDefaults.colors(
 @Composable
 private fun TextAction(
     text: String,
+    color: Color = Accent,
     onClick: () -> Unit,
 ) {
     Text(
         text = text,
-        color = Accent,
+        color = color,
         fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier
@@ -4991,6 +5920,7 @@ private fun MicGlyph(color: Color) {
 
 @Composable
 private fun BottomVoiceNav(
+    currentPage: WorkspacePage,
     selectedTab: ScheduleTab,
     onTodaySelected: () -> Unit,
     onTodoSelected: () -> Unit,
@@ -5014,7 +5944,7 @@ private fun BottomVoiceNav(
         BottomTabButton(
             icon = BottomNavIcon.Today,
             label = "日程",
-            selected = selectedTab.destination == TabDestination.Today,
+            selected = currentPage == WorkspacePage.Today && selectedTab.destination == TabDestination.Today,
             onClick = onTodaySelected,
             modifier = Modifier.weight(1f),
         )
@@ -5031,7 +5961,7 @@ private fun BottomVoiceNav(
         BottomTabButton(
             icon = BottomNavIcon.Todo,
             label = "待办",
-            selected = selectedTab.destination == TabDestination.Todo,
+            selected = currentPage == WorkspacePage.Todo && selectedTab.destination == TabDestination.Todo,
             onClick = onTodoSelected,
             modifier = Modifier.weight(1f),
         )
@@ -5142,6 +6072,7 @@ private fun AppleTabIcon(
                     cap = StrokeCap.Round,
                 )
             }
+
         }
     }
 }

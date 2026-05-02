@@ -84,10 +84,11 @@ interface CommitmentDao {
 }
 
 @Database(
-    entities = [ScheduleEntity::class, TodoEntity::class],
-    version = 1,
+    entities = [ScheduleEntity::class, TodoEntity::class, QuestBookEntity::class, QuestNodeEntity::class],
+    version = 2,
     exportSchema = false,
 )
 abstract class CommitmentDatabase : RoomDatabase() {
     abstract fun commitmentDao(): CommitmentDao
+    abstract fun questDao(): QuestDao
 }

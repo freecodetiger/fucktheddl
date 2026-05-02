@@ -23,9 +23,17 @@ class HomeSwipeNavigationTest {
             ),
         )
         assertEquals(
-            WorkspacePage.Today,
+            WorkspacePage.Quest,
             settleWorkspacePage(
                 currentPage = WorkspacePage.Todo,
+                totalDragX = -96f,
+                thresholdPx = 72f,
+            ),
+        )
+        assertEquals(
+            WorkspacePage.Todo,
+            settleWorkspacePage(
+                currentPage = WorkspacePage.Quest,
                 totalDragX = 96f,
                 thresholdPx = 72f,
             ),
@@ -59,12 +67,20 @@ class HomeSwipeNavigationTest {
             ),
         )
         assertEquals(
-            WorkspacePage.Todo,
+            WorkspacePage.Quest,
             settleWorkspacePage(
-                currentPage = WorkspacePage.Todo,
+                currentPage = WorkspacePage.Quest,
                 totalDragX = -96f,
                 thresholdPx = 72f,
             ),
         )
+    }
+
+    @Test
+    fun questEdgeHintOnlyShowsOnTodoPage() {
+        assertEquals(false, shouldShowQuestEdgeHint(WorkspacePage.Calendar))
+        assertEquals(false, shouldShowQuestEdgeHint(WorkspacePage.Today))
+        assertEquals(true, shouldShowQuestEdgeHint(WorkspacePage.Todo))
+        assertEquals(false, shouldShowQuestEdgeHint(WorkspacePage.Quest))
     }
 }

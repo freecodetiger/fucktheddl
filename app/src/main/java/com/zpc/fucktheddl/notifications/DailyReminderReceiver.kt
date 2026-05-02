@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.room.Room
 import com.zpc.fucktheddl.commitments.room.CommitmentDatabase
 import com.zpc.fucktheddl.commitments.room.LocalOwnerUserId
+import com.zpc.fucktheddl.commitments.room.MIGRATION_1_2
 import com.zpc.fucktheddl.commitments.room.RoomCommitmentRepository
 
 class DailyReminderReceiver : BroadcastReceiver() {
@@ -20,7 +21,7 @@ class DailyReminderReceiver : BroadcastReceiver() {
                     appContext,
                     CommitmentDatabase::class.java,
                     "fucktheddl_commitments.db",
-                ).build()
+                ).addMigrations(MIGRATION_1_2).build()
                 try {
                     val commitments = RoomCommitmentRepository(database).listCommitments(LocalOwnerUserId)
                     val briefing = DailyBriefingBuilder().build(commitments)
