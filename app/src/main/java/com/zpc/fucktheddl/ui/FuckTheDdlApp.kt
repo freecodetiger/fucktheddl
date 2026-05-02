@@ -3,6 +3,11 @@ package com.zpc.fucktheddl.ui
 import android.os.Handler
 import android.os.Looper
 import android.view.HapticFeedbackConstants
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
@@ -43,6 +48,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -93,6 +99,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -142,6 +149,10 @@ import com.zpc.fucktheddl.schedule.TodoPriority
 import com.zpc.fucktheddl.voice.RealtimeAsrCallback
 import com.zpc.fucktheddl.voice.RealtimeAsrClient
 import com.zpc.fucktheddl.updates.UpdateChecker
+import com.zpc.fucktheddl.updates.UpdateApkDownloader
+import com.zpc.fucktheddl.updates.UpdateDownloadProgress
+import androidx.core.content.FileProvider
+import java.io.File
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -449,6 +460,7 @@ private data class QuestNodeEditorState(
 
 private data class UpdatePromptState(
     val latestVersion: String,
+    val apkUrl: String,
 )
 
 internal fun buildVoiceRefinementPrompt(
@@ -1095,7 +1107,7 @@ private fun ConnectionSettingsOverlay(
                     result.error != null -> versionLabel = "${BuildConfig.VERSION_NAME} · 检查失败"
                     result.updateAvailable -> {
                         versionLabel = "${BuildConfig.VERSION_NAME} · 有更新"
-                        updatePrompt = UpdatePromptState(result.latestVersion)
+                        updatePrompt = UpdatePromptState(result.latestVersion, result.apkUrl)
                     }
                     else -> versionLabel = "${BuildConfig.VERSION_NAME} · 已是最新版"
                 }
@@ -1202,6 +1214,7 @@ private fun ConnectionSettingsOverlay(
             updatePrompt?.let { prompt ->
                 UpdateAvailableOverlay(
                     latestVersion = prompt.latestVersion,
+                    apkUrl = prompt.apkUrl,
                     onDismiss = { updatePrompt = null },
                 )
             }
@@ -1961,9 +1974,75 @@ private fun GitHubRepositoryRow(
 @Composable
 private fun UpdateAvailableOverlay(
     latestVersion: String,
+    apkUrl: String,
     onDismiss: () -> Unit,
 ) {
+    val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    var progress by remember { mutableStateOf<UpdateDownloadProgress?>(null) }
+    var statusText by remember { mutableStateOf("最新版 v$latestVersion 已发布，可以在应用内下载并安装。") }
+    var downloading by remember { mutableStateOf(false) }
+    var downloadedApk by remember { mutableStateOf<File?>(null) }
+    var permissionNeeded by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+
+    fun installIfAllowed(file: File) {
+        if (canRequestApkInstalls(context)) {
+            permissionNeeded = false
+            statusText = "正在打开系统安装器"
+            openApkInstaller(context, file)
+            return
+        }
+        permissionNeeded = true
+        statusText = "还需要允许 DDL Agent 安装未知来源应用。开启后返回这里继续安装。"
+    }
+
+    fun startDownload() {
+        if (downloading) return
+        if (apkUrl.isBlank()) {
+            errorText = "版本信息里没有安装包地址，请打开发布页面手动下载。"
+            return
+        }
+        downloading = true
+        permissionNeeded = false
+        errorText = null
+        progress = UpdateDownloadProgress(0L, 1L)
+        statusText = "正在下载 DDLAgent-v$latestVersion.apk"
+        Thread {
+            runCatching {
+                UpdateApkDownloader().download(
+                    apkUrl = apkUrl,
+                    destinationDir = File(context.cacheDir, "update-apks"),
+                    fileName = "DDLAgent-v$latestVersion.apk",
+                ) { nextProgress ->
+                    mainHandler.post {
+                        progress = nextProgress
+                        val total = nextProgress.totalBytes.takeIf { it > 0L }
+                        statusText = if (total == null) {
+                            "已下载 ${formatBytes(nextProgress.bytesRead)}"
+                        } else {
+                            "已下载 ${formatBytes(nextProgress.bytesRead)} / ${formatBytes(total)}"
+                        }
+                    }
+                }
+            }.onSuccess { file ->
+                mainHandler.post {
+                    downloading = false
+                    downloadedApk = file
+                    progress = UpdateDownloadProgress(1L, 1L)
+                    installIfAllowed(file)
+                }
+            }.onFailure { error ->
+                mainHandler.post {
+                    downloading = false
+                    errorText = error.message ?: "下载更新失败"
+                    statusText = "下载失败，可以重试或打开发布页面。"
+                }
+            }
+        }.start()
+    }
+
     Popup(
         alignment = Alignment.Center,
         properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true),
@@ -1985,38 +2064,115 @@ private fun UpdateAvailableOverlay(
                 Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(text = "发现新版本", color = Ink, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
                     Text(
-                        text = "最新版 v$latestVersion 已发布，点击获取最新版。",
+                        text = statusText,
                         color = Muted,
                         fontSize = 14.sp,
                         lineHeight = 20.sp,
                     )
+                    progress?.let { currentProgress ->
+                        LinearProgressIndicator(
+                            progress = { currentProgress.fraction },
+                            color = Accent,
+                            trackColor = Divider,
+                            modifier = Modifier.fillMaxWidth().height(8.dp),
+                        )
+                    }
+                    errorText?.let { message ->
+                        Text(text = message, color = Danger, fontSize = 13.sp, lineHeight = 18.sp)
+                    }
+                    if (permissionNeeded) {
+                        Text(
+                            text = "请在系统页面打开“允许来自此来源的应用”。开启后返回 DDL Agent，点击继续安装。",
+                            color = InkSoft,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                        )
+                    }
                     Button(
                         onClick = hapticClick(onClick = {
-                            uriHandler.openUri(UpdateChecker.ProductReleasePageUrl)
-                            onDismiss()
+                            val file = downloadedApk
+                            when {
+                                file != null && file.exists() -> installIfAllowed(file)
+                                else -> startDownload()
+                            }
                         }),
                         colors = ButtonDefaults.buttonColors(containerColor = Ink),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth().height(50.dp),
+                        enabled = !downloading,
                     ) {
-                        Text("打开发布页面", color = readableOn(Ink), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = when {
+                                downloadedApk != null -> "继续安装"
+                                downloading -> "正在下载"
+                                else -> "下载并安装"
+                            },
+                            color = readableOn(Ink),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    if (permissionNeeded) {
+                        Button(
+                            onClick = hapticClick(onClick = { openUnknownAppSourcesSettings(context) }),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                        ) {
+                            Text("去开启安装权限", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     Button(
                         onClick = hapticClick(onClick = {
-                            uriHandler.openUri(UpdateChecker.GitHubReleasePageUrl)
-                            onDismiss()
+                            uriHandler.openUri(UpdateChecker.ProductReleasePageUrl)
                         }),
                         colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth().height(50.dp),
                     ) {
-                        Text("打开 GitHub Release", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("打开发布页面", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     }
+                    TextAction(text = "GitHub Release", onClick = {
+                        uriHandler.openUri(UpdateChecker.GitHubReleasePageUrl)
+                    })
                     TextAction(text = "稍后再说", onClick = onDismiss)
                 }
             }
         }
     }
+}
+
+private fun canRequestApkInstalls(context: Context): Boolean {
+    return Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
+}
+
+private fun openUnknownAppSourcesSettings(context: Context) {
+    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).setData(Uri.parse("package:${context.packageName}"))
+    } else {
+        Intent(Settings.ACTION_SECURITY_SETTINGS)
+    }
+    context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
+private fun openApkInstaller(context: Context, apkFile: File) {
+    val apkUri = FileProvider.getUriForFile(
+        context,
+        "${BuildConfig.APPLICATION_ID}.update_files",
+        apkFile,
+    )
+    val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(apkUri, "application/vnd.android.package-archive")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(intent)
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024L) return "$bytes B"
+    val kib = bytes / 1024.0
+    if (kib < 1024.0) return "%.1f KB".format(kib)
+    return "%.1f MB".format(kib / 1024.0)
 }
 
 @Composable

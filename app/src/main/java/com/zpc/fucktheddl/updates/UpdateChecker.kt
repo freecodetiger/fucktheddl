@@ -7,6 +7,7 @@ import java.util.Locale
 data class UpdateCheckResult(
     val updateAvailable: Boolean,
     val latestVersion: String,
+    val apkUrl: String = "",
     val error: String? = null,
 )
 
@@ -15,10 +16,13 @@ class UpdateChecker(
 ) {
     fun check(currentVersion: String): UpdateCheckResult {
         return runCatching {
-            val latest = extractTagName(fetchLatestReleaseJson()).removePrefix("v")
+            val json = fetchLatestReleaseJson()
+            val latest = extractTagName(json).removePrefix("v")
+            val updateAvailable = compareVersions(latest, currentVersion.removePrefix("v")) > 0
             UpdateCheckResult(
-                updateAvailable = compareVersions(latest, currentVersion.removePrefix("v")) > 0,
+                updateAvailable = updateAvailable,
                 latestVersion = latest,
+                apkUrl = if (updateAvailable) extractApkUrl(json) else extractOptionalApkUrl(json),
             )
         }.getOrElse { error ->
             UpdateCheckResult(
@@ -38,6 +42,16 @@ class UpdateChecker(
             val match = Regex(""""tag_name"\s*:\s*"([^"]+)"""").find(json)
             return match?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
                 ?: error("版本信息解析失败")
+        }
+
+        fun extractApkUrl(json: String): String {
+            return extractOptionalApkUrl(json).takeIf { it.isNotBlank() }
+                ?: error("安装包地址解析失败")
+        }
+
+        private fun extractOptionalApkUrl(json: String): String {
+            val match = Regex(""""apk_url"\s*:\s*"([^"]+)"""").find(json)
+            return match?.groupValues?.get(1).orEmpty()
         }
 
         fun compareVersions(left: String, right: String): Int {
