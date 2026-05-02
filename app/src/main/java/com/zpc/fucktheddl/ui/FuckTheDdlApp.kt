@@ -13,6 +13,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -80,6 +81,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -90,7 +92,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -101,6 +105,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.zpc.fucktheddl.BuildConfig
+import com.zpc.fucktheddl.R
+import com.zpc.fucktheddl.about.AboutRepositoryInfo
 import com.zpc.fucktheddl.agent.AgentApplyResult
 import com.zpc.fucktheddl.agent.AgentClient
 import com.zpc.fucktheddl.agent.AgentCommitmentsPayload
@@ -134,6 +140,7 @@ import com.zpc.fucktheddl.schedule.TodoItem
 import com.zpc.fucktheddl.schedule.TodoPriority
 import com.zpc.fucktheddl.voice.RealtimeAsrCallback
 import com.zpc.fucktheddl.voice.RealtimeAsrClient
+import com.zpc.fucktheddl.updates.UpdateChecker
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
@@ -433,6 +440,10 @@ private data class QuestBookEditorState(
 
 private data class QuestNodeEditorState(
     val node: QuestNode,
+)
+
+private data class UpdatePromptState(
+    val latestVersion: String,
 )
 
 internal fun buildVoiceRefinementPrompt(
@@ -1050,6 +1061,11 @@ private fun ConnectionSettingsOverlay(
     var deepseekModel by remember(settings) { mutableStateOf(settings.deepseekModel) }
     var aliyunApiKey by remember(settings) { mutableStateOf(settings.aliyunApiKey) }
     var aliyunAsrUrl by remember(settings) { mutableStateOf(settings.aliyunAsrUrl) }
+    var versionLabel by remember { mutableStateOf(BuildConfig.VERSION_NAME) }
+    var updateChecking by remember { mutableStateOf(false) }
+    var updatePrompt by remember { mutableStateOf<UpdatePromptState?>(null) }
+    var repositoryPromptVisible by remember { mutableStateOf(false) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val deepseekUrlValid = deepseekBaseUrl.trim().let { it.startsWith("http://") || it.startsWith("https://") }
     val aliyunUrlValid = aliyunAsrUrl.trim().ifBlank { DEFAULT_ALIYUN_ASR_URL }.startsWith("wss://") ||
         aliyunAsrUrl.trim().ifBlank { DEFAULT_ALIYUN_ASR_URL }.startsWith("https://")
@@ -1061,6 +1077,26 @@ private fun ConnectionSettingsOverlay(
         aliyunApiKey = aliyunApiKey.trim(),
         aliyunAsrUrl = aliyunAsrUrl.trim().ifBlank { DEFAULT_ALIYUN_ASR_URL },
     )
+
+    fun checkForUpdates() {
+        if (updateChecking) return
+        updateChecking = true
+        versionLabel = "${BuildConfig.VERSION_NAME} · 检查中"
+        Thread {
+            val result = UpdateChecker().check(BuildConfig.VERSION_NAME)
+            mainHandler.post {
+                updateChecking = false
+                when {
+                    result.error != null -> versionLabel = "${BuildConfig.VERSION_NAME} · 检查失败"
+                    result.updateAvailable -> {
+                        versionLabel = "${BuildConfig.VERSION_NAME} · 有更新"
+                        updatePrompt = UpdatePromptState(result.latestVersion)
+                    }
+                    else -> versionLabel = "${BuildConfig.VERSION_NAME} · 已是最新版"
+                }
+            }
+        }.start()
+    }
     Popup(
         alignment = Alignment.Center,
         properties = PopupProperties(
@@ -1106,10 +1142,13 @@ private fun ConnectionSettingsOverlay(
                             themeMode = themeMode,
                             dailyReminderSettings = dailyReminderSettings,
                             notificationPermissionGranted = notificationPermissionGranted,
+                            versionLabel = versionLabel,
                             onConnectionClick = { panel = SettingsPanel.Connection },
                             onDailyReminderClick = { panel = SettingsPanel.DailyReminder },
                             onThemeClick = { panel = SettingsPanel.Theme },
                             onStatisticsClick = { panel = SettingsPanel.Statistics },
+                            onVersionClick = ::checkForUpdates,
+                            onRepositoryClick = { repositoryPromptVisible = true },
                             onClose = onClose,
                         )
 
@@ -1155,6 +1194,17 @@ private fun ConnectionSettingsOverlay(
                     }
                 }
             }
+            updatePrompt?.let { prompt ->
+                UpdateAvailableOverlay(
+                    latestVersion = prompt.latestVersion,
+                    onDismiss = { updatePrompt = null },
+                )
+            }
+            if (repositoryPromptVisible) {
+                GitHubRepositoryOverlay(
+                    onDismiss = { repositoryPromptVisible = false },
+                )
+            }
         }
     }
 }
@@ -1165,10 +1215,13 @@ private fun SettingsRootMenu(
     themeMode: AppThemeMode,
     dailyReminderSettings: DailyReminderSettings,
     notificationPermissionGranted: Boolean,
+    versionLabel: String,
     onConnectionClick: () -> Unit,
     onDailyReminderClick: () -> Unit,
     onThemeClick: () -> Unit,
     onStatisticsClick: () -> Unit,
+    onVersionClick: () -> Unit,
+    onRepositoryClick: () -> Unit,
     onClose: () -> Unit,
 ) {
     SettingsHeader(title = "设置")
@@ -1199,9 +1252,11 @@ private fun SettingsRootMenu(
     SettingsGroupTitle("关于")
     SettingsInfoRow(
         label = "版本",
-        value = BuildConfig.VERSION_NAME,
+        value = versionLabel,
         leadingColor = Ink,
+        onClick = onVersionClick,
     )
+    GitHubRepositoryRow(onClick = onRepositoryClick)
     Button(
         onClick = hapticClick(onClick = onClose),
         colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
@@ -1810,13 +1865,18 @@ private fun SettingsInfoRow(
     label: String,
     value: String,
     leadingColor: Color,
+    onClick: (() -> Unit)? = null,
 ) {
+    val rowModifier = Modifier
+        .fillMaxWidth()
+        .border(1.dp, Divider, RoundedCornerShape(16.dp))
+        .let { base ->
+            if (onClick == null) base else base.pressFeedbackClick(onClick = onClick, pressedScale = 0.98f)
+        }
     Surface(
         color = AccentSoft.copy(alpha = 0.42f),
         shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
+        modifier = rowModifier,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -1843,6 +1903,170 @@ private fun SettingsInfoRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (onClick != null) {
+                Text(text = "›", color = Muted, fontSize = 20.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitHubRepositoryRow(
+    onClick: () -> Unit,
+) {
+    Surface(
+        color = AccentSoft.copy(alpha = 0.42f),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(16.dp))
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.98f),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.ic_github_mark),
+                contentDescription = "GitHub",
+                colorFilter = ColorFilter.tint(Ink),
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = "GitHub 仓库",
+                color = Ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "freecodetiger",
+                color = Muted,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(text = "›", color = Muted, fontSize = 20.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun UpdateAvailableOverlay(
+    latestVersion: String,
+    onDismiss: () -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    Popup(
+        alignment = Alignment.Center,
+        properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true),
+        onDismissRequest = onDismiss,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Canvas.copy(alpha = 0.72f))
+                .padding(horizontal = 22.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                color = Panel,
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 18.dp,
+                modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(24.dp)),
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(text = "发现新版本", color = Ink, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "最新版 v$latestVersion 已发布，点击获取最新版。",
+                        color = Muted,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                    )
+                    Button(
+                        onClick = hapticClick(onClick = {
+                            uriHandler.openUri(UpdateChecker.ProductReleasePageUrl)
+                            onDismiss()
+                        }),
+                        colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                    ) {
+                        Text("打开发布页面", color = readableOn(Ink), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = hapticClick(onClick = {
+                            uriHandler.openUri(UpdateChecker.GitHubReleasePageUrl)
+                            onDismiss()
+                        }),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                    ) {
+                        Text("打开 GitHub Release", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextAction(text = "稍后再说", onClick = onDismiss)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitHubRepositoryOverlay(
+    onDismiss: () -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    Popup(
+        alignment = Alignment.Center,
+        properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true),
+        onDismissRequest = onDismiss,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Canvas.copy(alpha = 0.72f))
+                .padding(horizontal = 22.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                color = Panel,
+                shape = RoundedCornerShape(24.dp),
+                shadowElevation = 18.dp,
+                modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(24.dp)),
+            ) {
+                Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_github_mark),
+                            contentDescription = "GitHub",
+                            colorFilter = ColorFilter.tint(Ink),
+                            modifier = Modifier.size(24.dp),
+                        )
+                        Text(text = "GitHub 仓库", color = Ink, fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text(
+                        text = AboutRepositoryInfo.signatureText,
+                        color = Muted,
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp,
+                    )
+                    Button(
+                        onClick = hapticClick(onClick = {
+                            uriHandler.openUri(AboutRepositoryInfo.RepositoryUrl)
+                            onDismiss()
+                        }),
+                        colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                    ) {
+                        Text("为项目点star(推荐)", color = readableOn(Ink), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    TextAction(text = "关闭", onClick = onDismiss)
+                }
+            }
         }
     }
 }
