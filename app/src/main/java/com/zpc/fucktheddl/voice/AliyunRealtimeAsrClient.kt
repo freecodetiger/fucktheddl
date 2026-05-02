@@ -29,11 +29,13 @@ class AliyunRealtimeAsrClient(
     private var callback: RealtimeAsrCallback? = null
     private var cachedSession: JSONObject? = null
     private var cachedSessionAtMillis: Long = 0L
+    private val transcript = TranscriptAccumulator()
     @Volatile
     private var lastRecognizedText: String = ""
 
     override fun start(callback: RealtimeAsrCallback) {
         this.callback = callback
+        transcript.reset()
         lastRecognizedText = ""
         Thread {
             runCatching {
@@ -91,12 +93,14 @@ class AliyunRealtimeAsrClient(
         Thread {
             nui.cancelDialog()
             stopRecorder()
+            transcript.reset()
             lastRecognizedText = ""
         }.start()
     }
 
     override fun release() {
         stopRecorder()
+        transcript.reset()
         lastRecognizedText = ""
         nui.release()
         initialized = false
@@ -199,16 +203,18 @@ class AliyunRealtimeAsrClient(
             val text = extractAsrText(asrResult?.asrResult.orEmpty())
             when (event) {
                 Constants.NuiEvent.EVENT_ASR_PARTIAL_RESULT -> if (text.isNotBlank()) {
-                    lastRecognizedText = text
-                    callback?.onPartial(text)
+                    val accumulated = transcript.onPartial(text)
+                    lastRecognizedText = accumulated
+                    callback?.onPartial(accumulated)
                 } else {
                     Unit
                 }
                 Constants.NuiEvent.EVENT_SENTENCE_END,
                 Constants.NuiEvent.EVENT_ASR_RESULT,
                 -> if (text.isNotBlank()) {
-                    lastRecognizedText = text
-                    callback?.onFinal(text)
+                    val accumulated = transcript.onFinal(text)
+                    lastRecognizedText = accumulated
+                    callback?.onFinal(accumulated)
                 } else {
                     Unit
                 }

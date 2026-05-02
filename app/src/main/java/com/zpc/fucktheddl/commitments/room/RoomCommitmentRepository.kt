@@ -19,6 +19,12 @@ class RoomCommitmentRepository(
     private val dao: CommitmentDao = database.commitmentDao()
 
     override fun listCommitments(ownerUserId: String): AgentCommitmentsPayload {
+        if (ownerUserId == LocalOwnerUserId) {
+            return AgentCommitmentsPayload(
+                events = dao.listAllSchedules().map { it.toBackendEvent() },
+                todos = dao.listAllTodos().map { it.toBackendTodo() },
+            )
+        }
         return AgentCommitmentsPayload(
             events = dao.listSchedules(ownerUserId).map { it.toBackendEvent() },
             todos = dao.listTodos(ownerUserId).map { it.toBackendTodo() },
@@ -137,11 +143,21 @@ class RoomCommitmentRepository(
 
     private fun cancelCommitment(ownerUserId: String, commitmentId: String) {
         val updatedAt = nowIso()
-        val eventRows = dao.cancelSchedule(ownerUserId, commitmentId, updatedAt)
-        val todoRows = dao.cancelTodo(ownerUserId, commitmentId, updatedAt)
+        val eventRows = if (ownerUserId == LocalOwnerUserId) {
+            dao.cancelScheduleAnyOwner(commitmentId, updatedAt)
+        } else {
+            dao.cancelSchedule(ownerUserId, commitmentId, updatedAt)
+        }
+        val todoRows = if (ownerUserId == LocalOwnerUserId) {
+            dao.cancelTodoAnyOwner(commitmentId, updatedAt)
+        } else {
+            dao.cancelTodo(ownerUserId, commitmentId, updatedAt)
+        }
         check(eventRows + todoRows > 0) { "Commitment not found" }
     }
 }
+
+const val LocalOwnerUserId = "local_user"
 
 private fun ScheduleEntity.toBackendEvent(): BackendScheduleEvent {
     return BackendScheduleEvent(

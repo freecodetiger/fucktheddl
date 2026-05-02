@@ -52,8 +52,14 @@ interface CommitmentDao {
     @Query("SELECT * FROM schedules WHERE ownerUserId = :ownerUserId AND status = 'confirmed' ORDER BY startAt")
     fun listSchedules(ownerUserId: String): List<ScheduleEntity>
 
+    @Query("SELECT * FROM schedules WHERE status = 'confirmed' ORDER BY startAt")
+    fun listAllSchedules(): List<ScheduleEntity>
+
     @Query("SELECT * FROM todos WHERE ownerUserId = :ownerUserId AND status IN ('active', 'done') ORDER BY due, title")
     fun listTodos(ownerUserId: String): List<TodoEntity>
+
+    @Query("SELECT * FROM todos WHERE status IN ('active', 'done') ORDER BY due, title")
+    fun listAllTodos(): List<TodoEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun upsertSchedule(entity: ScheduleEntity)
@@ -67,8 +73,14 @@ interface CommitmentDao {
     @Query("UPDATE schedules SET status = 'cancelled', updatedAt = :updatedAt WHERE ownerUserId = :ownerUserId AND id = :id")
     fun cancelSchedule(ownerUserId: String, id: String, updatedAt: String): Int
 
+    @Query("UPDATE schedules SET status = 'cancelled', updatedAt = :updatedAt WHERE id = :id")
+    fun cancelScheduleAnyOwner(id: String, updatedAt: String): Int
+
     @Query("UPDATE todos SET status = 'cancelled', updatedAt = :updatedAt WHERE ownerUserId = :ownerUserId AND id = :id")
     fun cancelTodo(ownerUserId: String, id: String, updatedAt: String): Int
+
+    @Query("UPDATE todos SET status = 'cancelled', updatedAt = :updatedAt WHERE id = :id")
+    fun cancelTodoAnyOwner(id: String, updatedAt: String): Int
 }
 
 @Database(

@@ -34,10 +34,12 @@ data class VoiceInputState(
 class VoiceInputController(
     private val asrClient: RealtimeAsrClient,
 ) : RealtimeAsrCallback {
+    private val transcript = TranscriptAccumulator()
     var state: VoiceInputState = VoiceInputState()
         private set
 
     fun start() {
+        transcript.reset()
         state = state.copy(recording = true, readyToSubmit = false, error = null)
         asrClient.start(this)
     }
@@ -49,21 +51,29 @@ class VoiceInputController(
     fun stopAndAwaitFinal(timeoutMillis: Long = 1200L) {
         state = state.copy(recording = false, readyToSubmit = false)
         asrClient.stopAndAwaitFinal(timeoutMillis) { text ->
-            val finalText = text.ifBlank { state.draftText }
-            onFinal(finalText)
+            val finalText = text.ifBlank { state.draftText }.trim()
+            state = state.copy(
+                recording = false,
+                draftText = finalText,
+                finalText = finalText,
+                readyToSubmit = finalText.isNotBlank(),
+                error = null,
+            )
         }
     }
 
     override fun onPartial(text: String) {
-        state = state.copy(partialText = text, draftText = text)
+        val accumulated = transcript.onPartial(text)
+        state = state.copy(partialText = accumulated, draftText = accumulated)
     }
 
     override fun onFinal(text: String) {
+        val accumulated = transcript.onFinal(text)
         state = state.copy(
             recording = false,
-            draftText = text,
-            finalText = text,
-            readyToSubmit = text.isNotBlank(),
+            draftText = accumulated,
+            finalText = accumulated,
+            readyToSubmit = accumulated.isNotBlank(),
             error = null,
         )
     }

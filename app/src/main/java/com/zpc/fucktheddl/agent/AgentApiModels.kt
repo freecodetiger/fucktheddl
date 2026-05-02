@@ -1,25 +1,24 @@
 package com.zpc.fucktheddl.agent
 
-data class AgentApiConfig(
-    val baseUrl: String,
-    val accessToken: String = "",
-) {
-    val normalizedBaseUrl: String =
-        if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
-}
-
 data class AgentConnectionSettings(
-    val baseUrl: String,
-    val accessToken: String = "",
-    val userEmail: String = "",
     val deepseekApiKey: String = "",
     val deepseekBaseUrl: String = "https://api.deepseek.com/v1",
     val deepseekModel: String = "deepseek-v4-flash",
-) {
-    fun toConfig(): AgentApiConfig = AgentApiConfig(
-        baseUrl = baseUrl.trim(),
-        accessToken = accessToken.trim(),
-    )
+    val aliyunApiKey: String = "",
+    val aliyunAsrUrl: String = DEFAULT_ALIYUN_ASR_URL,
+)
+
+const val DEFAULT_ALIYUN_ASR_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+
+interface AgentClient {
+    fun testService(settings: AgentConnectionSettings): AgentConnectionTestResult
+
+    fun propose(
+        text: String,
+        sessionId: String = "android-${java.util.UUID.randomUUID()}",
+        commitments: AgentCommitmentsPayload? = null,
+        settings: AgentConnectionSettings? = null,
+    ): AgentSubmitResult
 }
 
 enum class CommitmentType {
@@ -145,4 +144,11 @@ fun AgentProposal.presentation(): ProposalPresentation {
         requiresConfirmation -> ProposalPresentation.Confirmable
         else -> ProposalPresentation.ResultOnly
     }
+}
+
+internal fun shouldEditProposalBeforeConfirm(
+    proposal: AgentProposal,
+    edited: Boolean,
+): Boolean {
+    return edited && (proposal.schedulePatch != null || proposal.todoPatch != null)
 }

@@ -6,41 +6,29 @@ import org.junit.Test
 
 class AgentApiModelsTest {
     @Test
-    fun debugBaseUrlAlwaysHasTrailingSlash() {
-        val config = AgentApiConfig(baseUrl = "http://192.168.1.10:8000")
+    fun connectionSettingsDefaultToLocalServiceEndpoints() {
+        val settings = AgentConnectionSettings()
 
-        assertEquals("http://192.168.1.10:8000/", config.normalizedBaseUrl)
+        assertEquals("https://api.deepseek.com/v1", settings.deepseekBaseUrl)
+        assertEquals("deepseek-v4-flash", settings.deepseekModel)
+        assertEquals(DEFAULT_ALIYUN_ASR_URL, settings.aliyunAsrUrl)
     }
 
     @Test
-    fun connectionSettingsBuildRuntimeApiConfig() {
+    fun localServiceSettingsCarryUserModelAndAsrKeys() {
         val settings = AgentConnectionSettings(
-            baseUrl = " http://server.example:8001 ",
-            accessToken = " token-1 ",
-        )
-
-        val config = settings.toConfig()
-
-        assertEquals("http://server.example:8001/", config.normalizedBaseUrl)
-        assertEquals("token-1", config.accessToken)
-    }
-
-    @Test
-    fun deepseekSettingsDoNotChangeBackendConnectionConfig() {
-        val base = AgentConnectionSettings(
-            baseUrl = "http://server.example:8001",
-            accessToken = "token-1",
             deepseekApiKey = "",
             deepseekBaseUrl = "https://api.deepseek.com/v1",
             deepseekModel = "deepseek-v4-flash",
-        )
-        val withUserModel = base.copy(
-            deepseekApiKey = "user-model-key",
-            deepseekBaseUrl = "https://custom-model.example/v1",
-            deepseekModel = "custom-model",
+            aliyunApiKey = "",
+            aliyunAsrUrl = DEFAULT_ALIYUN_ASR_URL,
+        ).copy(
+            deepseekApiKey = "user-deepseek-key",
+            aliyunApiKey = "user-aliyun-key",
         )
 
-        assertEquals(base.toConfig(), withUserModel.toConfig())
+        assertEquals("user-deepseek-key", settings.deepseekApiKey)
+        assertEquals("user-aliyun-key", settings.aliyunApiKey)
     }
 
     @Test

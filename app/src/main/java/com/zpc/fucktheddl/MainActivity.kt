@@ -2,10 +2,12 @@ package com.zpc.fucktheddl
 
 import android.Manifest
 import android.os.Bundle
+import android.os.Build
 import android.content.pm.PackageManager
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -14,18 +16,18 @@ import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.room.Room
-import com.zpc.fucktheddl.BuildConfig
-import com.zpc.fucktheddl.agent.AgentApiClient
 import com.zpc.fucktheddl.agent.AgentConnectionSettings
-import com.zpc.fucktheddl.auth.AuthRepository
-import com.zpc.fucktheddl.auth.AuthSession
-import com.zpc.fucktheddl.auth.AuthSessionStore
+import com.zpc.fucktheddl.agent.DEFAULT_ALIYUN_ASR_URL
+import com.zpc.fucktheddl.agent.LocalAgentClient
+import com.zpc.fucktheddl.agent.localAliyunAsrSession
 import com.zpc.fucktheddl.commitments.room.CommitmentDatabase
+import com.zpc.fucktheddl.commitments.room.LocalOwnerUserId
 import com.zpc.fucktheddl.commitments.room.RoomCommitmentRepository
+import com.zpc.fucktheddl.notifications.DailyReminderScheduler
+import com.zpc.fucktheddl.notifications.DailyReminderSettingsStore
 import com.zpc.fucktheddl.schedule.StarterScheduleRepository
 import com.zpc.fucktheddl.ui.AppThemeMode
 import com.zpc.fucktheddl.ui.FuckTheDdlApp
-import com.zpc.fucktheddl.ui.LoginScreen
 import com.zpc.fucktheddl.ui.theme.FuckTheDdlTheme
 import com.zpc.fucktheddl.voice.AliyunRealtimeAsrClient
 
@@ -44,74 +46,30 @@ class MainActivity : ComponentActivity() {
             "fucktheddl_commitments.db",
         ).build()
         val commitmentRepository = RoomCommitmentRepository(commitmentDatabase)
-        val authSessionStore = AuthSessionStore(this)
-        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
         val settingsStore = AgentSettingsStore(this)
+        val reminderSettingsStore = DailyReminderSettingsStore(this)
+        val reminderScheduler = DailyReminderScheduler(this)
         setContent {
             FuckTheDdlTheme {
                 var connectionSettings by remember { mutableStateOf(settingsStore.load()) }
                 var themeMode by remember { mutableStateOf(settingsStore.loadThemeMode()) }
-                var authSession by remember { mutableStateOf(authSessionStore.load()) }
-                var loginSending by remember { mutableStateOf(false) }
-                var loginVerifying by remember { mutableStateOf(false) }
-                var loginMessage by remember { mutableStateOf("") }
-                val effectiveSettings = connectionSettings.copy(
-                    accessToken = authSession.accessToken,
-                    userEmail = authSession.email,
-                )
-                if (!authSession.isLoggedIn) {
-                    LoginScreen(
-                        sending = loginSending,
-                        verifying = loginVerifying,
-                        message = loginMessage,
-                        onRequestCode = { email ->
-                            if (loginSending) return@LoginScreen
-                            loginSending = true
-                            loginMessage = "验证码发送中..."
-                            Thread {
-                                val error = AuthRepository(AgentApiClient(connectionSettings.toConfig()))
-                                    .requestCode(email)
-                                mainHandler.post {
-                                    loginSending = false
-                                    loginMessage = error ?: "验证码已发送，请查看邮箱"
-                                }
-                            }.start()
-                        },
-                        onVerifyCode = { email, code ->
-                            if (loginVerifying) return@LoginScreen
-                            loginVerifying = true
-                            loginMessage = "登录中..."
-                            Thread {
-                                val result = AuthRepository(AgentApiClient(connectionSettings.toConfig()))
-                                    .verifyCode(email, code)
-                                mainHandler.post {
-                                    loginVerifying = false
-                                    if (result.error == null && result.accessToken.isNotBlank()) {
-                                        val session = AuthSession(
-                                            userId = result.userId,
-                                            email = result.email.ifBlank { email },
-                                            accessToken = result.accessToken,
-                                        )
-                                        authSessionStore.save(session)
-                                        authSession = session
-                                        loginMessage = ""
-                                    } else {
-                                        loginMessage = result.error ?: "登录失败"
-                                    }
-                                }
-                            }.start()
-                        },
-                    )
-                    return@FuckTheDdlTheme
+                var dailyReminderSettings by remember { mutableStateOf(reminderSettingsStore.load()) }
+                var notificationPermissionGranted by remember {
+                    mutableStateOf(hasNotificationPermission())
                 }
-                val agentApiConfig = effectiveSettings.toConfig()
-                val agentApiClient = remember(agentApiConfig) {
-                    AgentApiClient(agentApiConfig)
+                val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestPermission(),
+                ) { granted ->
+                    notificationPermissionGranted = granted
+                    if (granted && dailyReminderSettings.enabled) {
+                        reminderScheduler.apply(dailyReminderSettings)
+                    }
                 }
-                val asrClient = remember(agentApiConfig) {
+                val localAgentClient = remember { LocalAgentClient() }
+                val asrClient = remember(connectionSettings.aliyunApiKey, connectionSettings.aliyunAsrUrl) {
                     AliyunRealtimeAsrClient(
                         context = applicationContext,
-                        sessionProvider = { agentApiClient.asrSession() },
+                        sessionProvider = { localAliyunAsrSession(connectionSettings) },
                     )
                 }
                 DisposableEffect(asrClient) {
@@ -121,26 +79,50 @@ class MainActivity : ComponentActivity() {
                 }
                 FuckTheDdlApp(
                     initialState = initialState,
-                    connectionSettings = effectiveSettings,
+                    connectionSettings = connectionSettings,
                     themeMode = themeMode,
-                    agentApiClient = agentApiClient,
+                    agentClient = localAgentClient,
                     asrClient = asrClient,
-                    commitmentsProvider = { commitmentRepository.listCommitments(authSession.userId) },
-                    proposalApplier = { proposal -> commitmentRepository.applyProposal(authSession.userId, proposal) },
-                    commitmentDeleter = { commitmentId -> commitmentRepository.deleteCommitment(authSession.userId, commitmentId) },
-                    userEmail = authSession.email,
+                    commitmentsProvider = { commitmentRepository.listCommitments(LocalOwnerUserId) },
+                    proposalApplier = { proposal -> commitmentRepository.applyProposal(LocalOwnerUserId, proposal) },
+                    commitmentDeleter = { commitmentId -> commitmentRepository.deleteCommitment(LocalOwnerUserId, commitmentId) },
                     onConnectionSettingsSaved = { settings ->
-                        val persisted = settings.copy(accessToken = "", userEmail = "")
-                        settingsStore.save(persisted)
-                        connectionSettings = persisted
+                        settingsStore.save(settings)
+                        connectionSettings = settings
                     },
                     onThemeModeChanged = { mode ->
                         settingsStore.saveThemeMode(mode)
                         themeMode = mode
                     },
+                    dailyReminderSettings = dailyReminderSettings,
+                    notificationPermissionGranted = notificationPermissionGranted,
+                    onDailyReminderSettingsChanged = { settings ->
+                        reminderSettingsStore.save(settings)
+                        dailyReminderSettings = settings
+                        reminderScheduler.apply(settings)
+                        if (settings.enabled && !hasNotificationPermission()) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        } else {
+                            notificationPermissionGranted = hasNotificationPermission()
+                        }
+                    },
+                    onRequestNotificationPermission = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            notificationPermissionGranted = true
+                        }
+                    },
                 )
             }
         }
+    }
+
+    private fun hasNotificationPermission(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 }
 
@@ -149,11 +131,6 @@ private class AgentSettingsStore(context: Context) {
 
     fun load(): AgentConnectionSettings {
         return AgentConnectionSettings(
-            baseUrl = preferences.getString("base_url", BuildConfig.AGENT_BASE_URL)
-                ?.takeIf { it.isNotBlank() }
-                ?: BuildConfig.AGENT_BASE_URL,
-            accessToken = "",
-            userEmail = "",
             deepseekApiKey = preferences.getString("deepseek_api_key", "").orEmpty(),
             deepseekBaseUrl = preferences.getString("deepseek_base_url", "https://api.deepseek.com/v1")
                 ?.takeIf { it.isNotBlank() }
@@ -161,15 +138,20 @@ private class AgentSettingsStore(context: Context) {
             deepseekModel = preferences.getString("deepseek_model", "deepseek-v4-flash")
                 ?.takeIf { it.isNotBlank() }
                 ?: "deepseek-v4-flash",
+            aliyunApiKey = preferences.getString("aliyun_api_key", "").orEmpty(),
+            aliyunAsrUrl = preferences.getString("aliyun_asr_url", DEFAULT_ALIYUN_ASR_URL)
+                ?.takeIf { it.isNotBlank() }
+                ?: DEFAULT_ALIYUN_ASR_URL,
         )
     }
 
     fun save(settings: AgentConnectionSettings) {
         preferences.edit()
-            .putString("base_url", settings.baseUrl.trim())
             .putString("deepseek_api_key", settings.deepseekApiKey.trim())
             .putString("deepseek_base_url", settings.deepseekBaseUrl.trim())
             .putString("deepseek_model", settings.deepseekModel.trim())
+            .putString("aliyun_api_key", settings.aliyunApiKey.trim())
+            .putString("aliyun_asr_url", settings.aliyunAsrUrl.trim())
             .apply()
     }
 

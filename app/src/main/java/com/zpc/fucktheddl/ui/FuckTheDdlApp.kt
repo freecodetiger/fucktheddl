@@ -1,7 +1,5 @@
 package com.zpc.fucktheddl.ui
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.HapticFeedbackConstants
@@ -91,7 +89,6 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -104,8 +101,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.zpc.fucktheddl.BuildConfig
-import com.zpc.fucktheddl.agent.AgentApiClient
 import com.zpc.fucktheddl.agent.AgentApplyResult
+import com.zpc.fucktheddl.agent.AgentClient
 import com.zpc.fucktheddl.agent.AgentCommitmentsPayload
 import com.zpc.fucktheddl.agent.AgentConnectionSettings
 import com.zpc.fucktheddl.agent.AgentProposal
@@ -114,6 +111,8 @@ import com.zpc.fucktheddl.agent.AgentSchedulePatch
 import com.zpc.fucktheddl.agent.AgentTodoPatch
 import com.zpc.fucktheddl.agent.AgentUpdatePatch
 import com.zpc.fucktheddl.agent.CommitmentType
+import com.zpc.fucktheddl.agent.DEFAULT_ALIYUN_ASR_URL
+import com.zpc.fucktheddl.agent.LocalAgentClient
 import com.zpc.fucktheddl.agent.ProposalPresentation
 import com.zpc.fucktheddl.agent.createScheduleProposal
 import com.zpc.fucktheddl.agent.createTodoProposal
@@ -121,6 +120,7 @@ import com.zpc.fucktheddl.agent.mapCommitmentsToScheduleState
 import com.zpc.fucktheddl.agent.presentation
 import com.zpc.fucktheddl.agent.toScheduleUpdateProposal
 import com.zpc.fucktheddl.agent.toTodoUpdateProposal
+import com.zpc.fucktheddl.notifications.DailyReminderSettings
 import com.zpc.fucktheddl.schedule.ScheduleEvent
 import com.zpc.fucktheddl.schedule.ScheduleRisk
 import com.zpc.fucktheddl.schedule.ScheduleShellState
@@ -134,6 +134,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -336,8 +337,8 @@ private enum class BottomNavIcon {
 
 private enum class SettingsPanel {
     Root,
-    User,
     Connection,
+    DailyReminder,
     Theme,
     Statistics,
 }
@@ -414,17 +415,34 @@ private data class EditableProposalDraft(
     }
 }
 
+internal fun buildVoiceRefinementPrompt(
+    originalText: String,
+    proposal: AgentProposal,
+    correctionText: String,
+): String {
+    return listOf(
+        "用户正在修正上一条语音指令。请在原始请求基础上应用用户修正，输出一个完整的新日程或待办意图，不要只处理修正句本身。",
+        "原始请求：${originalText.trim()}",
+        "当前理解：${proposal.voiceRefinementSummary()}",
+        "用户修正：${correctionText.trim()}",
+    ).joinToString("\n")
+}
+
+private fun AgentProposal.voiceRefinementSummary(): String {
+    schedulePatch?.let { patch ->
+        return "日程，标题=${patch.title}，开始=${patch.start}，结束=${patch.end}，地点=${patch.location}，备注=${patch.notes}"
+    }
+    todoPatch?.let { patch ->
+        return "待办，标题=${patch.title}，截止=${patch.due}，优先级=${patch.priority}，备注=${patch.notes}"
+    }
+    return "${commitmentType.name}，标题=$title，摘要=$summary"
+}
+
+internal fun newVoiceConversationSessionId(): String = "voice-${UUID.randomUUID()}"
+
 private sealed interface CommitmentEditTarget {
     data class Schedule(val event: ScheduleEvent) : CommitmentEditTarget
     data class Todo(val todo: TodoItem) : CommitmentEditTarget
-}
-
-private sealed interface UpdateCheckState {
-    data object Idle : UpdateCheckState
-    data object Checking : UpdateCheckState
-    data object UpToDate : UpdateCheckState
-    data class UpdateAvailable(val version: String) : UpdateCheckState
-    data object Failed : UpdateCheckState
 }
 
 private typealias CommitmentEditRequester = (CommitmentEditTarget) -> Unit
@@ -463,6 +481,49 @@ private fun Modifier.commitmentLongPressMenu(
         }
 }
 
+private fun Modifier.pressFeedbackClick(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    pressedScale: Float = 0.94f,
+    hapticFeedback: Int = HapticFeedbackConstants.CLOCK_TICK,
+): Modifier = composed {
+    val view = LocalView.current
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) pressedScale else 1f,
+        animationSpec = spring(dampingRatio = 0.58f, stiffness = 760f),
+        label = "press-feedback-scale",
+    )
+    graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }.pointerInput(enabled, onClick) {
+        detectTapGestures(
+            onPress = {
+                if (enabled) {
+                    view.performHapticFeedback(hapticFeedback)
+                    pressed = true
+                    val released = tryAwaitRelease()
+                    pressed = false
+                    if (released) onClick()
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun hapticClick(
+    onClick: () -> Unit,
+    hapticFeedback: Int = HapticFeedbackConstants.CLOCK_TICK,
+): () -> Unit {
+    val view = LocalView.current
+    return {
+        view.performHapticFeedback(hapticFeedback)
+        onClick()
+    }
+}
+
 internal fun settleWorkspacePage(
     currentPage: WorkspacePage,
     totalDragX: Float,
@@ -481,14 +542,17 @@ fun FuckTheDdlApp(
     initialState: ScheduleShellState,
     connectionSettings: AgentConnectionSettings,
     themeMode: AppThemeMode = AppThemeMode.ClassicLight,
-    agentApiClient: AgentApiClient? = null,
+    dailyReminderSettings: DailyReminderSettings = DailyReminderSettings(),
+    notificationPermissionGranted: Boolean = true,
+    agentClient: AgentClient? = LocalAgentClient(),
     asrClient: RealtimeAsrClient? = null,
     commitmentsProvider: () -> AgentCommitmentsPayload = { AgentCommitmentsPayload(emptyList(), emptyList()) },
     proposalApplier: (AgentProposal) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
     commitmentDeleter: (String) -> AgentApplyResult = { AgentApplyResult("failed", "", "本地存储不可用") },
-    userEmail: String = "",
     onConnectionSettingsSaved: (AgentConnectionSettings) -> Unit = {},
     onThemeModeChanged: (AppThemeMode) -> Unit = {},
+    onDailyReminderSettingsChanged: (DailyReminderSettings) -> Unit = {},
+    onRequestNotificationPermission: () -> Unit = {},
 ) {
     var shellState by remember { mutableStateOf(initialState) }
     val todayTab = remember(shellState.tabs) {
@@ -517,13 +581,13 @@ fun FuckTheDdlApp(
     var backendConnectionState by remember { mutableStateOf(BackendConnectionState()) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-    fun testBackendConnection(settings: AgentConnectionSettings) {
+    fun testLocalServices(settings: AgentConnectionSettings) {
         backendConnectionState = BackendConnectionState(
             indicator = ConnectionIndicator.Checking,
             label = "检测中",
         )
         Thread {
-            val result = AgentApiClient(settings.toConfig()).testService(settings)
+            val result = (agentClient ?: LocalAgentClient()).testService(settings)
             mainHandler.post {
                 backendConnectionState = BackendConnectionState(
                     indicator = if (result.healthy) ConnectionIndicator.Connected else ConnectionIndicator.Failed,
@@ -597,7 +661,7 @@ fun FuckTheDdlApp(
 
     LaunchedEffect(Unit) {
         refreshCommitments()
-        testBackendConnection(connectionSettings)
+        backendConnectionState = connectionSettings.localConfigState()
     }
 
     CompositionLocalProvider(LocalAppColors provides themeMode.colors()) {
@@ -612,7 +676,7 @@ fun FuckTheDdlApp(
                     onTodoSelected = {
                         workspacePage = WorkspacePage.Todo
                     },
-                    agentApiClient = agentApiClient,
+                    agentClient = agentClient,
                     asrClient = asrClient,
                     connectionSettings = connectionSettings,
                     commitmentsProvider = commitmentsProvider,
@@ -697,16 +761,19 @@ fun FuckTheDdlApp(
                     settings = connectionSettings,
                     connectionState = backendConnectionState,
                     themeMode = themeMode,
-                    userEmail = userEmail.ifBlank { connectionSettings.userEmail },
+                    dailyReminderSettings = dailyReminderSettings,
+                    notificationPermissionGranted = notificationPermissionGranted,
                     events = shellState.events,
                     todos = shellState.todos,
                     onThemeModeChanged = onThemeModeChanged,
-                    onTestConnection = ::testBackendConnection,
+                    onDailyReminderSettingsChanged = onDailyReminderSettingsChanged,
+                    onRequestNotificationPermission = onRequestNotificationPermission,
+                    onTestConnection = ::testLocalServices,
                     onSave = { settings ->
                         val shouldRetest = settings.serviceTestKey() != connectionSettings.serviceTestKey()
                         onConnectionSettingsSaved(settings)
                         if (shouldRetest) {
-                            testBackendConnection(settings)
+                            backendConnectionState = settings.localConfigState()
                         }
                         showingSettings = false
                     },
@@ -735,9 +802,7 @@ private fun CompactHeader(
             fontSize = 28.sp,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 0.sp,
-            modifier = Modifier.pointerInput(Unit) {
-                detectTapGestures(onTap = { onDateClick() })
-            },
+            modifier = Modifier.pressFeedbackClick(onClick = onDateClick, pressedScale = 0.98f),
         )
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -758,9 +823,7 @@ private fun SettingsButton(onClick: () -> Unit) {
         shape = RoundedCornerShape(999.dp),
         modifier = Modifier
             .size(38.dp)
-            .pointerInput(Unit) {
-                detectTapGestures(onTap = { onClick() })
-            },
+            .pressFeedbackClick(onClick = onClick),
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
@@ -805,28 +868,33 @@ private fun ConnectionSettingsOverlay(
     settings: AgentConnectionSettings,
     connectionState: BackendConnectionState,
     themeMode: AppThemeMode,
-    userEmail: String,
+    dailyReminderSettings: DailyReminderSettings,
+    notificationPermissionGranted: Boolean,
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
     onThemeModeChanged: (AppThemeMode) -> Unit,
+    onDailyReminderSettingsChanged: (DailyReminderSettings) -> Unit,
+    onRequestNotificationPermission: () -> Unit,
     onTestConnection: (AgentConnectionSettings) -> Unit,
     onSave: (AgentConnectionSettings) -> Unit,
     onClose: () -> Unit,
 ) {
     var panel by remember { mutableStateOf(SettingsPanel.Root) }
-    var baseUrl by remember(settings) { mutableStateOf(settings.baseUrl) }
     var deepseekApiKey by remember(settings) { mutableStateOf(settings.deepseekApiKey) }
     var deepseekBaseUrl by remember(settings) { mutableStateOf(settings.deepseekBaseUrl) }
     var deepseekModel by remember(settings) { mutableStateOf(settings.deepseekModel) }
-    val normalizedBaseUrl = baseUrl.trim()
-    val urlValid = normalizedBaseUrl.startsWith("http://") || normalizedBaseUrl.startsWith("https://")
+    var aliyunApiKey by remember(settings) { mutableStateOf(settings.aliyunApiKey) }
+    var aliyunAsrUrl by remember(settings) { mutableStateOf(settings.aliyunAsrUrl) }
+    val deepseekUrlValid = deepseekBaseUrl.trim().let { it.startsWith("http://") || it.startsWith("https://") }
+    val aliyunUrlValid = aliyunAsrUrl.trim().ifBlank { DEFAULT_ALIYUN_ASR_URL }.startsWith("wss://") ||
+        aliyunAsrUrl.trim().ifBlank { DEFAULT_ALIYUN_ASR_URL }.startsWith("https://")
+    val urlValid = deepseekUrlValid && aliyunUrlValid
     val settingsToTest = AgentConnectionSettings(
-        baseUrl = normalizedBaseUrl,
-        accessToken = settings.accessToken.trim(),
-        userEmail = userEmail.trim(),
         deepseekApiKey = deepseekApiKey.trim(),
         deepseekBaseUrl = deepseekBaseUrl.trim().ifBlank { "https://api.deepseek.com/v1" },
         deepseekModel = deepseekModel.trim().ifBlank { "deepseek-v4-flash" },
+        aliyunApiKey = aliyunApiKey.trim(),
+        aliyunAsrUrl = aliyunAsrUrl.trim().ifBlank { DEFAULT_ALIYUN_ASR_URL },
     )
     Popup(
         alignment = Alignment.Center,
@@ -871,29 +939,26 @@ private fun ConnectionSettingsOverlay(
                         SettingsPanel.Root -> SettingsRootMenu(
                             connectionState = connectionState,
                             themeMode = themeMode,
-                            userEmail = userEmail,
-                            userBound = userEmail.isNotBlank(),
-                            onUserClick = { panel = SettingsPanel.User },
+                            dailyReminderSettings = dailyReminderSettings,
+                            notificationPermissionGranted = notificationPermissionGranted,
                             onConnectionClick = { panel = SettingsPanel.Connection },
+                            onDailyReminderClick = { panel = SettingsPanel.DailyReminder },
                             onThemeClick = { panel = SettingsPanel.Theme },
                             onStatisticsClick = { panel = SettingsPanel.Statistics },
                             onClose = onClose,
                         )
 
-                        SettingsPanel.User -> UserSettingsMenu(
-                            email = userEmail,
-                            onBack = { panel = SettingsPanel.Root },
-                                )
-
                         SettingsPanel.Connection -> ConnectionSettingsMenu(
-                            baseUrl = baseUrl,
-                            onBaseUrlChange = { baseUrl = it },
                             deepseekApiKey = deepseekApiKey,
                             onDeepseekApiKeyChange = { deepseekApiKey = it },
                             deepseekBaseUrl = deepseekBaseUrl,
                             onDeepseekBaseUrlChange = { deepseekBaseUrl = it },
                             deepseekModel = deepseekModel,
                             onDeepseekModelChange = { deepseekModel = it },
+                            aliyunApiKey = aliyunApiKey,
+                            onAliyunApiKeyChange = { aliyunApiKey = it },
+                            aliyunAsrUrl = aliyunAsrUrl,
+                            onAliyunAsrUrlChange = { aliyunAsrUrl = it },
                             urlValid = urlValid,
                             connectionState = connectionState,
                             onBack = { panel = SettingsPanel.Root },
@@ -906,6 +971,14 @@ private fun ConnectionSettingsOverlay(
                         SettingsPanel.Theme -> ThemeSettingsMenu(
                             themeMode = themeMode,
                             onThemeModeChanged = onThemeModeChanged,
+                            onBack = { panel = SettingsPanel.Root },
+                        )
+
+                        SettingsPanel.DailyReminder -> DailyReminderSettingsMenu(
+                            settings = dailyReminderSettings,
+                            notificationPermissionGranted = notificationPermissionGranted,
+                            onSettingsChanged = onDailyReminderSettingsChanged,
+                            onRequestNotificationPermission = onRequestNotificationPermission,
                             onBack = { panel = SettingsPanel.Root },
                         )
 
@@ -925,23 +998,17 @@ private fun ConnectionSettingsOverlay(
 private fun SettingsRootMenu(
     connectionState: BackendConnectionState,
     themeMode: AppThemeMode,
-    userEmail: String,
-    userBound: Boolean,
-    onUserClick: () -> Unit,
+    dailyReminderSettings: DailyReminderSettings,
+    notificationPermissionGranted: Boolean,
     onConnectionClick: () -> Unit,
+    onDailyReminderClick: () -> Unit,
     onThemeClick: () -> Unit,
     onStatisticsClick: () -> Unit,
     onClose: () -> Unit,
 ) {
     SettingsHeader(title = "设置")
     SettingsMenuRow(
-        title = "用户",
-        detail = userEmail.ifBlank { "未绑定" },
-        indicator = if (userBound) ConnectionIndicator.Connected else ConnectionIndicator.NotConnected,
-        onClick = onUserClick,
-    )
-    SettingsMenuRow(
-        title = "连接",
+        title = "本地服务",
         detail = connectionState.label,
         indicator = connectionState.indicator,
         onClick = onConnectionClick,
@@ -951,6 +1018,12 @@ private fun SettingsRootMenu(
         detail = themeMode.label,
         swatch = themeMode.swatchColor(),
         onClick = onThemeClick,
+    )
+    SettingsMenuRow(
+        title = "每日提醒",
+        detail = dailyReminderSettings.reminderDetail(notificationPermissionGranted),
+        swatch = if (dailyReminderSettings.enabled) Amber else Muted,
+        onClick = onDailyReminderClick,
     )
     SettingsMenuRow(
         title = "统计",
@@ -964,75 +1037,8 @@ private fun SettingsRootMenu(
         value = BuildConfig.VERSION_NAME,
         leadingColor = Ink,
     )
-    val context = LocalContext.current
-    val currentVersion = BuildConfig.VERSION_NAME
-    var updateState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
-
-    fun checkUpdate() {
-        updateState = UpdateCheckState.Checking
-        Thread {
-            try {
-                val url = java.net.URL("https://github.com/freecodetiger/fucktheddl/releases/latest")
-                val conn = url.openConnection() as java.net.HttpURLConnection
-                conn.setRequestProperty("User-Agent", "fucktheddl/1.0")
-                conn.instanceFollowRedirects = false
-                conn.connectTimeout = 8000
-                conn.readTimeout = 8000
-                val responseUrl = conn.getHeaderField("Location") ?: conn.url.toString()
-                conn.disconnect()
-                val remoteTag = responseUrl.substringAfterLast("/").removePrefix("v")
-                val remoteParts = remoteTag.split(".").map { it.toIntOrNull() ?: 0 }
-                val localParts = currentVersion.split(".").map { it.toIntOrNull() ?: 0 }
-                val newer = remoteParts.zip(localParts).any { (r, l) -> r > l } ||
-                        (remoteParts.size > localParts.size && remoteParts.take(localParts.size) == localParts)
-                Handler(Looper.getMainLooper()).post {
-                    updateState = if (newer) UpdateCheckState.UpdateAvailable(remoteTag)
-                    else UpdateCheckState.UpToDate
-                }
-            } catch (_: Exception) {
-                Handler(Looper.getMainLooper()).post {
-                    updateState = UpdateCheckState.Failed
-                }
-            }
-        }.start()
-    }
-
-    when (val state = updateState) {
-        UpdateCheckState.Idle -> SettingsMenuRow(
-            title = "检查更新",
-            detail = "点击检查",
-            swatch = Accent,
-            onClick = { checkUpdate() },
-        )
-        UpdateCheckState.Checking -> SettingsMenuRow(
-            title = "检查更新",
-            detail = "检查中...",
-            onClick = {},
-        )
-        UpdateCheckState.UpToDate -> SettingsMenuRow(
-            title = "检查更新",
-            detail = "已是最新版本",
-            swatch = Success,
-            onClick = {},
-        )
-        is UpdateCheckState.UpdateAvailable -> SettingsMenuRow(
-            title = "检查更新",
-            detail = "下载 v${state.version}",
-            swatch = Danger,
-            onClick = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/freecodetiger/fucktheddl/releases/latest"))
-                context.startActivity(intent)
-            },
-        )
-        UpdateCheckState.Failed -> SettingsMenuRow(
-            title = "检查更新",
-            detail = "检查失败，点击重试",
-            swatch = Risk,
-            onClick = { checkUpdate() },
-        )
-    }
     Button(
-        onClick = onClose,
+        onClick = hapticClick(onClick = onClose),
         colors = ButtonDefaults.buttonColors(containerColor = AccentSoft),
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier
@@ -1045,30 +1051,23 @@ private fun SettingsRootMenu(
 
 @Composable
 private fun ConnectionSettingsMenu(
-    baseUrl: String,
-    onBaseUrlChange: (String) -> Unit,
     deepseekApiKey: String,
     onDeepseekApiKeyChange: (String) -> Unit,
     deepseekBaseUrl: String,
     onDeepseekBaseUrlChange: (String) -> Unit,
     deepseekModel: String,
     onDeepseekModelChange: (String) -> Unit,
+    aliyunApiKey: String,
+    onAliyunApiKeyChange: (String) -> Unit,
+    aliyunAsrUrl: String,
+    onAliyunAsrUrlChange: (String) -> Unit,
     urlValid: Boolean,
     connectionState: BackendConnectionState,
     onBack: () -> Unit,
     onTest: () -> Unit,
     onSave: () -> Unit,
 ) {
-    SettingsHeader(title = "连接", onBack = onBack)
-    OutlinedTextField(
-        value = baseUrl,
-        onValueChange = onBaseUrlChange,
-        label = { Text("后端 URL", fontSize = 12.sp) },
-        singleLine = true,
-        shape = RoundedCornerShape(14.dp),
-        colors = appTextFieldColors(),
-        modifier = Modifier.fillMaxWidth(),
-    )
+    SettingsHeader(title = "本地服务", onBack = onBack)
     OutlinedTextField(
         value = deepseekApiKey,
         onValueChange = onDeepseekApiKeyChange,
@@ -1098,15 +1097,33 @@ private fun ConnectionSettingsMenu(
             modifier = Modifier.weight(1f),
         )
     }
+    OutlinedTextField(
+        value = aliyunApiKey,
+        onValueChange = onAliyunApiKeyChange,
+        label = { Text("阿里云语音 API Key", fontSize = 12.sp) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = appTextFieldColors(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = aliyunAsrUrl,
+        onValueChange = onAliyunAsrUrlChange,
+        label = { Text("阿里云语音 URL", fontSize = 12.sp) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = appTextFieldColors(),
+        modifier = Modifier.fillMaxWidth(),
+    )
     if (!urlValid) {
         Text(
-            text = "URL 需要以 http:// 或 https:// 开头",
+            text = "DeepSeek URL 需要以 http:// 或 https:// 开头；阿里云语音 URL 需要以 wss:// 或 https:// 开头",
             color = Danger,
             fontSize = 12.sp,
         )
     }
     Button(
-        onClick = onTest,
+        onClick = hapticClick(onClick = onTest),
         enabled = urlValid && connectionState.indicator != ConnectionIndicator.Checking,
         colors = ButtonDefaults.buttonColors(
             containerColor = AccentSoft,
@@ -1118,7 +1135,7 @@ private fun ConnectionSettingsMenu(
             .height(50.dp),
     ) {
         Text(
-            text = if (connectionState.indicator == ConnectionIndicator.Checking) "测试中..." else "测试服务",
+            text = if (connectionState.indicator == ConnectionIndicator.Checking) "测试中..." else "测试本地服务",
             color = Accent,
             fontSize = 16.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1126,7 +1143,7 @@ private fun ConnectionSettingsMenu(
     }
     ConnectionTestResult(connectionState = connectionState)
     Button(
-        onClick = onSave,
+        onClick = hapticClick(onClick = onSave),
         enabled = urlValid,
         colors = ButtonDefaults.buttonColors(containerColor = Ink),
         shape = RoundedCornerShape(16.dp),
@@ -1136,25 +1153,6 @@ private fun ConnectionSettingsMenu(
     ) {
         Text("保存", color = readableOn(Ink), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
     }
-}
-
-@Composable
-private fun UserSettingsMenu(
-    email: String,
-    onBack: () -> Unit,
-) {
-    SettingsHeader(title = "用户", onBack = onBack)
-    Text(
-        text = "当前邮箱",
-        color = Muted,
-        fontSize = 13.sp,
-        lineHeight = 19.sp,
-    )
-    SettingsInfoRow(
-        label = "邮箱",
-        value = email.ifBlank { "未登录" },
-        leadingColor = Success,
-    )
 }
 
 @Composable
@@ -1185,6 +1183,88 @@ private fun ThemeSettingsMenu(
         selected = themeMode == AppThemeMode.FogBlue,
         onClick = { onThemeModeChanged(AppThemeMode.FogBlue) },
     )
+}
+
+@Composable
+private fun DailyReminderSettingsMenu(
+    settings: DailyReminderSettings,
+    notificationPermissionGranted: Boolean,
+    onSettingsChanged: (DailyReminderSettings) -> Unit,
+    onRequestNotificationPermission: () -> Unit,
+    onBack: () -> Unit,
+) {
+    var timeLabel by remember(settings) { mutableStateOf(settings.timeLabel) }
+    SettingsHeader(title = "每日提醒", onBack = onBack)
+    Surface(
+        color = AccentSoft.copy(alpha = 0.42f),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, Divider, RoundedCornerShape(18.dp)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(text = "每天一次", color = Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = if (settings.enabled) "将在 ${settings.timeLabel} 提醒今天还需要处理的事项" else "关闭后不会发送每日通知",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                )
+            }
+            Switch(
+                checked = settings.enabled,
+                onCheckedChange = { enabled ->
+                    onSettingsChanged(DailyReminderSettings.fromTimeLabel(enabled = enabled, timeLabel = timeLabel))
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = Accent,
+                    uncheckedThumbColor = Color.White,
+                    uncheckedTrackColor = Divider,
+                ),
+            )
+        }
+    }
+    TimePickerField(
+        value = timeLabel,
+        onTimeChange = { selectedTime ->
+            timeLabel = selectedTime
+            onSettingsChanged(DailyReminderSettings.fromTimeLabel(enabled = settings.enabled, timeLabel = selectedTime))
+        },
+        label = "提醒时间",
+        dialogTitle = "选择每日提醒时间",
+        modifier = Modifier.fillMaxWidth(),
+    )
+    SettingsInfoRow(
+        label = "提醒范围",
+        value = "仅显示今天未过期事项",
+        leadingColor = Accent,
+    )
+    if (!notificationPermissionGranted) {
+        SettingsInfoRow(
+            label = "通知权限",
+            value = "需要开启后才能弹出提醒",
+            leadingColor = Danger,
+        )
+        Button(
+            onClick = hapticClick(onClick = onRequestNotificationPermission),
+            colors = ButtonDefaults.buttonColors(containerColor = Ink),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+        ) {
+            Text("开启通知权限", color = readableOn(Ink), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
 }
 
 @Composable
@@ -1327,9 +1407,7 @@ private fun SettingsHeader(
                 shape = RoundedCornerShape(999.dp),
                 modifier = Modifier
                     .size(36.dp)
-                    .pointerInput(Unit) {
-                        detectTapGestures(onTap = { onBack() })
-                    },
+                    .pressFeedbackClick(onClick = onBack),
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                     Text(text = "‹", color = Accent, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
@@ -1360,9 +1438,7 @@ private fun SettingsMenuRow(
         modifier = Modifier
             .fillMaxWidth()
             .border(1.dp, Divider, RoundedCornerShape(18.dp))
-            .pointerInput(title) {
-                detectTapGestures(onTap = { onClick() })
-            },
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.98f),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 15.dp),
@@ -1464,18 +1540,46 @@ private fun ConnectionIndicator.label(): String = when (this) {
 
 private fun AgentConnectionSettings.serviceTestKey(): String {
     return listOf(
-        baseUrl.trim(),
-        accessToken.trim(),
         deepseekApiKey.trim(),
         deepseekBaseUrl.trim(),
         deepseekModel.trim(),
+        aliyunApiKey.trim(),
+        aliyunAsrUrl.trim(),
     ).joinToString(separator = "\u0000")
+}
+
+private fun AgentConnectionSettings.localConfigState(): BackendConnectionState {
+    val missing = listOfNotNull(
+        "DeepSeek".takeIf { deepseekApiKey.isBlank() },
+        "阿里云语音".takeIf { aliyunApiKey.isBlank() },
+    )
+    return if (missing.isEmpty()) {
+        BackendConnectionState(
+            indicator = ConnectionIndicator.Connected,
+            label = "本地配置就绪",
+            detail = "语音和模型将由本机直连用户配置的服务",
+        )
+    } else {
+        BackendConnectionState(
+            indicator = ConnectionIndicator.NotConnected,
+            label = "缺少${missing.joinToString("、")} Key",
+            detail = "填写后即可本地使用",
+        )
+    }
 }
 
 private fun AppThemeMode.swatchColor(): Color = when (this) {
     AppThemeMode.ClassicLight -> Color(0xFF2F7D8C)
     AppThemeMode.Dark -> Color(0xFF000000)
     AppThemeMode.FogBlue -> Color(0xFF5F7E9B)
+}
+
+private fun DailyReminderSettings.reminderDetail(notificationPermissionGranted: Boolean): String {
+    return when {
+        !enabled -> "关闭"
+        !notificationPermissionGranted -> "需要通知权限"
+        else -> timeLabel
+    }
 }
 
 @Composable
@@ -1507,9 +1611,7 @@ private fun ThemeOptionRow(
                 color = if (selected) Accent else Divider,
                 shape = RoundedCornerShape(16.dp),
             )
-            .pointerInput(name) {
-                detectTapGestures(onTap = { onClick() })
-            },
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.98f),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -2356,7 +2458,7 @@ private fun QuadrantCell(
                 if (selected) info.color else Divider,
                 RoundedCornerShape(10.dp),
             )
-            .pointerInput(info.label) { detectTapGestures(onTap = { onClick() }) },
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.96f),
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
@@ -2392,7 +2494,7 @@ private fun InlineEditActions(
             shape = RoundedCornerShape(999.dp),
             modifier = Modifier
                 .border(1.dp, Divider, RoundedCornerShape(999.dp))
-                .pointerInput(Unit) { detectTapGestures(onTap = { onCancel() }) },
+                .pressFeedbackClick(onClick = onCancel),
         ) {
             Text(
                 text = "取消",
@@ -2405,7 +2507,7 @@ private fun InlineEditActions(
         Surface(
             color = Ink,
             shape = RoundedCornerShape(999.dp),
-            modifier = Modifier.pointerInput(Unit) { detectTapGestures(onTap = { onSave() }) },
+            modifier = Modifier.pressFeedbackClick(onClick = onSave),
         ) {
             Text(
                 text = "完成",
@@ -2436,7 +2538,7 @@ private fun DatePickerField(
     }
     var showDialog by remember { mutableStateOf(false) }
 
-    Box(modifier = modifier) {
+    Box(modifier = modifier.pressFeedbackClick(onClick = { showDialog = true }, pressedScale = 0.98f)) {
         OutlinedTextField(
             value = displayText ?: "",
             onValueChange = {},
@@ -2448,11 +2550,6 @@ private fun DatePickerField(
             colors = appTextFieldColors(),
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = { Text("▾", fontSize = 12.sp, color = Muted) },
-        )
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .pointerInput(Unit) { detectTapGestures(onTap = { showDialog = true }) },
         )
     }
 
@@ -2544,7 +2641,7 @@ private fun TimePickerField(
         h to m
     }
 
-    Box(modifier = modifier) {
+    Box(modifier = modifier.pressFeedbackClick(onClick = { showDialog = true }, pressedScale = 0.98f)) {
         OutlinedTextField(
             value = value,
             onValueChange = {},
@@ -2555,11 +2652,6 @@ private fun TimePickerField(
             colors = appTextFieldColors(),
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = { Text("▾", fontSize = 12.sp, color = Muted) },
-        )
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .pointerInput(Unit) { detectTapGestures(onTap = { showDialog = true }) },
         )
     }
 
@@ -2767,9 +2859,7 @@ private fun GlobalCreateFab(
             shadowElevation = 12.dp,
             modifier = Modifier
                 .size(54.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = { onToggle() })
-                },
+                .pressFeedbackClick(onClick = onToggle, pressedScale = 0.9f),
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 Text(
@@ -2814,9 +2904,7 @@ private fun CreateMenuRow(
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .pointerInput(text) {
-                detectTapGestures(onTap = { onClick() })
-            },
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.97f),
     ) {
         Text(
             text = text,
@@ -3682,9 +3770,11 @@ private fun TodoCard(
                     .width(88.dp)
                     .offset { androidx.compose.ui.unit.IntOffset(deleteSlideOffsetX, 0) }
                     .graphicsLayer { alpha = revealProgress }
-                    .pointerInput(Unit) {
-                        detectTapGestures(onTap = { onDelete() })
-                    },
+                    .pressFeedbackClick(
+                        onClick = onDelete,
+                        pressedScale = 0.96f,
+                        hapticFeedback = HapticFeedbackConstants.CONFIRM,
+                    ),
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                     Text(text = "删除", color = readableOn(Danger), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -3808,9 +3898,7 @@ private fun MiniDeleteButton(onClick: () -> Unit) {
     Surface(
         color = DangerSoft,
         shape = RoundedCornerShape(999.dp),
-        modifier = Modifier.pointerInput(Unit) {
-            detectTapGestures(onTap = { onClick() })
-        },
+        modifier = Modifier.pressFeedbackClick(onClick = onClick),
     ) {
         Text(
             text = "删除",
@@ -3837,9 +3925,10 @@ private fun ConfirmableMiniDeleteButton(
         Surface(
             color = Danger,
             shape = RoundedCornerShape(999.dp),
-            modifier = Modifier.pointerInput(Unit) {
-                detectTapGestures(onTap = { onConfirm() })
-            },
+            modifier = Modifier.pressFeedbackClick(
+                onClick = onConfirm,
+                hapticFeedback = HapticFeedbackConstants.CONFIRM,
+            ),
         ) {
             Text(
                 text = "删除",
@@ -3852,9 +3941,7 @@ private fun ConfirmableMiniDeleteButton(
         Surface(
             color = AccentSoft,
             shape = RoundedCornerShape(999.dp),
-            modifier = Modifier.pointerInput(Unit) {
-                detectTapGestures(onTap = { onCancel() })
-            },
+            modifier = Modifier.pressFeedbackClick(onClick = onCancel),
         ) {
             Text(
                 text = "取消",
@@ -3905,7 +3992,7 @@ private fun BottomWorkspace(
     selectedTab: ScheduleTab,
     onTodaySelected: () -> Unit,
     onTodoSelected: () -> Unit,
-    agentApiClient: AgentApiClient?,
+    agentClient: AgentClient?,
     asrClient: RealtimeAsrClient?,
     connectionSettings: AgentConnectionSettings,
     commitmentsProvider: () -> AgentCommitmentsPayload,
@@ -3932,7 +4019,7 @@ private fun BottomWorkspace(
                 selectedTab = selectedTab,
                 onTodaySelected = onTodaySelected,
                 onTodoSelected = onTodoSelected,
-                agentApiClient = agentApiClient,
+                agentClient = agentClient,
                 asrClient = asrClient,
                 connectionSettings = connectionSettings,
                 commitmentsProvider = commitmentsProvider,
@@ -3951,7 +4038,7 @@ private fun VoiceAgentDock(
     selectedTab: ScheduleTab,
     onTodaySelected: () -> Unit,
     onTodoSelected: () -> Unit,
-    agentApiClient: AgentApiClient?,
+    agentClient: AgentClient?,
     asrClient: RealtimeAsrClient?,
     connectionSettings: AgentConnectionSettings,
     commitmentsProvider: () -> AgentCommitmentsPayload,
@@ -3960,7 +4047,7 @@ private fun VoiceAgentDock(
     onVoiceRecordingChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var status by remember { mutableStateOf(if (agentApiClient == null) "后端未连接" else "准备说话") }
+    var status by remember { mutableStateOf(if (agentClient == null) "本地 Agent 不可用" else "准备说话") }
     var submittedText by remember { mutableStateOf<String?>(null) }
     var phase by remember { mutableStateOf(ComposerPhase.Idle) }
     var proposal by remember { mutableStateOf<AgentProposal?>(null) }
@@ -3968,33 +4055,52 @@ private fun VoiceAgentDock(
     var isListening by remember { mutableStateOf(false) }
     var voiceText by remember { mutableStateOf("") }
     var voiceCancelArmed by remember { mutableStateOf(false) }
+    var refinementBaseText by remember { mutableStateOf<String?>(null) }
+    var refinementBaseProposal by remember { mutableStateOf<AgentProposal?>(null) }
+    var conversationSessionId by remember { mutableStateOf(newVoiceConversationSessionId()) }
     val hasModelApiKey = connectionSettings.deepseekApiKey.isNotBlank()
-    val isSignedIn = connectionSettings.accessToken.isNotBlank() && connectionSettings.userEmail.isNotBlank()
+    val hasAsrApiKey = connectionSettings.aliyunApiKey.isNotBlank()
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     LaunchedEffect(isListening) {
         onVoiceRecordingChanged(isListening)
     }
 
-    fun submit(value: String) {
+    fun clearConversationTurn(
+        nextStatus: String = "准备说话",
+        nextPhase: ComposerPhase = ComposerPhase.Idle,
+        startNewSession: Boolean = true,
+    ) {
+        submittedText = null
+        proposal = null
+        voiceText = ""
+        voiceCancelArmed = false
+        refinementBaseText = null
+        refinementBaseProposal = null
+        isListening = false
+        phase = nextPhase
+        status = nextStatus
+        if (startNewSession) {
+            conversationSessionId = newVoiceConversationSessionId()
+        }
+    }
+
+    fun submit(value: String, displayText: String = value) {
         val prompt = value.trim()
         if (prompt.isBlank()) {
             status = "没有识别到内容"
             return
         }
-        if (!isSignedIn) {
-            phase = ComposerPhase.Error
-            status = "请先在设置里绑定邮箱"
-            return
-        }
         if (!hasModelApiKey) {
+            phase = ComposerPhase.Error
+            status = "请先在设置里填写 DeepSeek API Key"
             return
         }
-        submittedText = prompt
+        submittedText = displayText.trim().ifBlank { prompt }
         proposal = null
-        val client = agentApiClient
+        val client = agentClient
         if (client == null) {
             phase = ComposerPhase.Error
-            status = "后端未连接"
+            status = "本地 Agent 不可用"
             return
         }
         phase = ComposerPhase.Working
@@ -4004,6 +4110,7 @@ private fun VoiceAgentDock(
         Thread {
             val result = client.propose(
                 text = prompt,
+                sessionId = conversationSessionId,
                 commitments = commitmentsProvider(),
                 settings = connectionSettings,
             )
@@ -4021,6 +4128,110 @@ private fun VoiceAgentDock(
                 }
             }
             }.start()
+    }
+
+    fun startVoiceCapture(refining: Boolean) {
+        if (!hasModelApiKey) {
+            status = "请先在设置里填写 DeepSeek API Key"
+            phase = ComposerPhase.Error
+            return
+        }
+        if (!hasAsrApiKey) {
+            status = "请先在设置里填写阿里云语音 API Key"
+            phase = ComposerPhase.Error
+            return
+        }
+        val client = asrClient
+        if (client == null) {
+            status = "语音暂不可用"
+            phase = ComposerPhase.Error
+            return
+        }
+        activeRequestId += 1
+        if (refining) {
+            refinementBaseText = submittedText?.takeIf { it.isNotBlank() } ?: voiceText
+            refinementBaseProposal = proposal
+        } else {
+            clearConversationTurn(startNewSession = true)
+        }
+        proposal = null
+        voiceText = ""
+        voiceCancelArmed = false
+        isListening = true
+        phase = ComposerPhase.Idle
+        status = if (refining) "正在听修正" else "正在听"
+        client.start(object : RealtimeAsrCallback {
+            override fun onPartial(text: String) {
+                mainHandler.post {
+                    voiceText = text
+                    status = if (refining) "正在听修正" else "正在听"
+                }
+            }
+
+            override fun onFinal(text: String) {
+                mainHandler.post {
+                    voiceText = text
+                    status = if (refining) "已识别修正，松手重整" else "已识别，松手发送"
+                }
+            }
+
+            override fun onError(message: String) {
+                mainHandler.post {
+                    isListening = false
+                    voiceCancelArmed = false
+                    phase = ComposerPhase.Error
+                    status = message
+                }
+            }
+        })
+    }
+
+    fun finishVoiceCapture() {
+        val client = asrClient
+        val releaseRequestId = activeRequestId + 1
+        activeRequestId = releaseRequestId
+        isListening = false
+        voiceCancelArmed = false
+        phase = ComposerPhase.Working
+        status = "正在收尾"
+        if (client == null) {
+            status = "语音暂不可用"
+            phase = ComposerPhase.Error
+            return
+        }
+        client.stopAndAwaitFinal(timeoutMillis = 1800L) { finalText ->
+            mainHandler.post {
+                if (releaseRequestId != activeRequestId) {
+                    return@post
+                }
+                val text = finalText.ifBlank { voiceText }.trim()
+                if (text.isBlank()) {
+                    status = "没有识别到内容"
+                    phase = ComposerPhase.Error
+                    return@post
+                }
+                val baseText = refinementBaseText
+                val baseProposal = refinementBaseProposal
+                refinementBaseText = null
+                refinementBaseProposal = null
+                if (baseText != null && baseProposal != null) {
+                    status = "正在按修正重新整理"
+                    submit(
+                        value = buildVoiceRefinementPrompt(baseText, baseProposal, text),
+                        displayText = "$baseText\n修正：$text",
+                    )
+                } else {
+                    status = "正在整理"
+                    submit(text)
+                }
+            }
+        }
+    }
+
+    fun cancelVoiceCapture(cancelStatus: String) {
+        activeRequestId += 1
+        asrClient?.cancel()
+        clearConversationTurn(nextStatus = cancelStatus, startNewSession = true)
     }
 
     val overlayVisible = isListening ||
@@ -4052,8 +4263,11 @@ private fun VoiceAgentDock(
                             proposal = null
                             status = result.error ?: "已确认并刷新"
                             if (result.error == null) {
-                                submittedText = null
-                                phase = ComposerPhase.Confirmed
+                                clearConversationTurn(
+                                    nextStatus = "已确认并刷新",
+                                    nextPhase = ComposerPhase.Confirmed,
+                                    startNewSession = true,
+                                )
                                 onCommitmentsChanged()
                             } else {
                                 phase = ComposerPhase.Error
@@ -4063,20 +4277,27 @@ private fun VoiceAgentDock(
                 },
                 onCancel = {
                     activeRequestId += 1
-                    submittedText = null
-                    proposal = null
-                    phase = ComposerPhase.Idle
-                    status = "准备说话"
-                    if (isListening) {
-                        isListening = false
-                        voiceCancelArmed = false
-                        voiceText = ""
+                    val wasListening = isListening
+                    clearConversationTurn(startNewSession = true)
+                    if (wasListening) {
                         asrClient?.cancel()
                     }
                 },
                 onCandidateSelected = { candidate ->
                     submit(candidate.resolutionText)
                 },
+                canRefineVoice = asrClient != null &&
+                    hasModelApiKey &&
+                    hasAsrApiKey &&
+                    phase == ComposerPhase.ProposalReady &&
+                    proposal != null,
+                onRefinePressStart = { startVoiceCapture(refining = true) },
+                onRefineCancelMove = { armed ->
+                    voiceCancelArmed = armed
+                    status = if (armed) "松手取消修正" else "正在听修正"
+                },
+                onRefinePressEnd = { finishVoiceCapture() },
+                onRefineCancel = { cancelVoiceCapture("已取消修正") },
             )
         }
         BottomVoiceNav(
@@ -4084,100 +4305,24 @@ private fun VoiceAgentDock(
             onTodaySelected = onTodaySelected,
             onTodoSelected = onTodoSelected,
             voiceEnabled = asrClient != null &&
-                isSignedIn &&
                 hasModelApiKey &&
+                hasAsrApiKey &&
                 phase != ComposerPhase.Working &&
                 phase != ComposerPhase.Confirming,
             listening = isListening,
             cancelArmed = voiceCancelArmed,
             onPressStart = {
-                if (!isSignedIn) {
-                    status = "请先在设置里绑定邮箱"
-                    phase = ComposerPhase.Error
-                    return@BottomVoiceNav
-                }
-                if (!hasModelApiKey) {
-                    return@BottomVoiceNav
-                }
-                val client = asrClient
-                if (client == null) {
-                    status = "语音暂不可用"
-                    phase = ComposerPhase.Error
-                    return@BottomVoiceNav
-                }
-                activeRequestId += 1
-                proposal = null
-                submittedText = null
-                voiceText = ""
-                voiceCancelArmed = false
-                isListening = true
-                phase = ComposerPhase.Idle
-                status = "正在听"
-                client.start(object : RealtimeAsrCallback {
-                    override fun onPartial(text: String) {
-                        mainHandler.post {
-                            voiceText = text
-                            status = "正在听"
-                        }
-                    }
-
-                    override fun onFinal(text: String) {
-                        mainHandler.post {
-                            voiceText = text
-                            status = "已识别，松手发送"
-                        }
-                    }
-
-                    override fun onError(message: String) {
-                        mainHandler.post {
-                            isListening = false
-                            voiceCancelArmed = false
-                            phase = ComposerPhase.Error
-                            status = message
-                        }
-                    }
-                })
+                startVoiceCapture(refining = false)
             },
             onCancelMove = { armed ->
                 voiceCancelArmed = armed
                 status = if (armed) "松手取消" else "正在听"
             },
             onPressEnd = {
-                val client = asrClient
-                val releaseRequestId = activeRequestId + 1
-                activeRequestId = releaseRequestId
-                isListening = false
-                voiceCancelArmed = false
-                phase = ComposerPhase.Working
-                status = "正在收尾"
-                if (client == null) {
-                    status = "语音暂不可用"
-                    phase = ComposerPhase.Error
-                    return@BottomVoiceNav
-                }
-                client.stopAndAwaitFinal(timeoutMillis = 1800L) { finalText ->
-                    mainHandler.post {
-                        if (releaseRequestId != activeRequestId) {
-                            return@post
-                        }
-                        val text = finalText.ifBlank { voiceText }.trim()
-                        if (text.isNotBlank()) {
-                            status = "正在整理"
-                            submit(text)
-                        } else {
-                            status = "没有识别到内容"
-                            phase = ComposerPhase.Error
-                        }
-                    }
-                }
+                finishVoiceCapture()
             },
             onCancel = {
-                activeRequestId += 1
-                isListening = false
-                voiceCancelArmed = false
-                voiceText = ""
-                asrClient?.cancel()
-                status = "已取消语音"
+                cancelVoiceCapture("已取消语音")
             },
         )
     }
@@ -4194,6 +4339,11 @@ private fun VoiceInteractionOverlay(
     onConfirm: (AgentProposal, Boolean) -> Unit,
     onCancel: () -> Unit,
     onCandidateSelected: (AgentProposalCandidate) -> Unit,
+    canRefineVoice: Boolean,
+    onRefinePressStart: () -> Unit,
+    onRefineCancelMove: (Boolean) -> Unit,
+    onRefinePressEnd: () -> Unit,
+    onRefineCancel: () -> Unit,
 ) {
     Popup(
         alignment = Alignment.Center,
@@ -4260,13 +4410,21 @@ private fun VoiceInteractionOverlay(
 
                     null -> Unit
                 }
+                if (canRefineVoice) {
+                    VoiceRefinementControl(
+                        onPressStart = onRefinePressStart,
+                        onCancelMove = onRefineCancelMove,
+                        onPressEnd = onRefinePressEnd,
+                        onCancel = onRefineCancel,
+                    )
+                }
                 when {
                     phase == ComposerPhase.Working -> {
                         TextAction(text = "停止", onClick = onCancel)
                     }
                     phase == ComposerPhase.Error -> {
                         Button(
-                            onClick = onCancel,
+                            onClick = hapticClick(onClick = onCancel),
                             colors = ButtonDefaults.buttonColors(containerColor = InkSoft),
                             shape = RoundedCornerShape(999.dp),
                         ) {
@@ -4276,6 +4434,35 @@ private fun VoiceInteractionOverlay(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun VoiceRefinementControl(
+    onPressStart: () -> Unit,
+    onCancelMove: (Boolean) -> Unit,
+    onPressEnd: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "按住麦克风说修正",
+            color = Muted,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
+        VoicePrimaryButton(
+            enabled = true,
+            listening = false,
+            cancelArmed = false,
+            onPressStart = onPressStart,
+            onCancelMove = onCancelMove,
+            onPressEnd = onPressEnd,
+            onCancel = onCancel,
+        )
     }
 }
 
@@ -4356,9 +4543,10 @@ private fun CandidateChoiceList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(1.dp, Divider, RoundedCornerShape(18.dp))
-                    .pointerInput(candidate.id) {
-                        detectTapGestures(onTap = { onCandidateSelected(candidate) })
-                    },
+                    .pressFeedbackClick(
+                        onClick = { onCandidateSelected(candidate) },
+                        pressedScale = 0.98f,
+                    ),
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -4439,7 +4627,7 @@ private fun ProposalReviewPanel(
                 ProposalReadOnlySummary(proposal = editedProposal)
             }
             Button(
-                onClick = { onConfirm(if (edited) editedProposal else proposal, edited) },
+                onClick = hapticClick(onClick = { onConfirm(if (edited) editedProposal else proposal, edited) }),
                 colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
@@ -4535,7 +4723,7 @@ private fun ProposalResultPanel(
                 lineHeight = 24.sp,
             )
             Button(
-                onClick = onClose,
+                onClick = hapticClick(onClick = onClose),
                 colors = ButtonDefaults.buttonColors(containerColor = Ink),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
@@ -4646,9 +4834,7 @@ private fun TextAction(
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier
             .padding(horizontal = 6.dp, vertical = 8.dp)
-            .pointerInput(onClick) {
-                detectTapGestures(onTap = { onClick() })
-            },
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.94f),
     )
 }
 
@@ -4669,9 +4855,7 @@ private fun CallActionButton(
             shadowElevation = 10.dp,
             modifier = Modifier
                 .size(72.dp)
-                .pointerInput(onClick) {
-                    detectTapGestures(onTap = { onClick() })
-                },
+                .pressFeedbackClick(onClick = onClick, pressedScale = 0.9f),
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 Text(text = symbol, color = readableOn(color), fontSize = 34.sp, fontWeight = FontWeight.SemiBold)
@@ -4866,9 +5050,7 @@ private fun BottomTabButton(
     Column(
         modifier = modifier
             .height(72.dp)
-            .pointerInput(onClick) {
-                detectTapGestures(onTap = { onClick() })
-            },
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.92f),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -4999,10 +5181,16 @@ private fun VoicePrimaryButton(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val view = LocalView.current
     val diagonalCancelX = with(LocalDensity.current) { 34.dp.toPx() }
     val diagonalCancelY = with(LocalDensity.current) { 22.dp.toPx() }
     val forgivingCancelY = with(LocalDensity.current) { 58.dp.toPx() }
     val upwardFallbackY = with(LocalDensity.current) { 96.dp.toPx() }
+    val voiceScale by animateFloatAsState(
+        targetValue = if (listening) 0.92f else 1f,
+        animationSpec = spring(dampingRatio = 0.58f, stiffness = 760f),
+        label = "voice-press-scale",
+    )
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center,
@@ -5018,12 +5206,17 @@ private fun VoicePrimaryButton(
             shadowElevation = if (listening) 8.dp else 0.dp,
             modifier = Modifier
                 .size(58.dp)
+                .graphicsLayer {
+                    scaleX = voiceScale
+                    scaleY = voiceScale
+                }
                 .pointerInput(enabled, diagonalCancelX, diagonalCancelY, forgivingCancelY, upwardFallbackY) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         if (!enabled) {
                             return@awaitEachGesture
                         }
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         onPressStart()
                         val startX = down.position.x
                         val startY = down.position.y
