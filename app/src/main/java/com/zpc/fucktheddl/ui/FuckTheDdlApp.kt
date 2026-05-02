@@ -4,8 +4,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
@@ -74,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -90,6 +93,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -130,6 +134,9 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 enum class AppThemeMode(
@@ -340,6 +347,12 @@ private enum class CreateCommitmentKind {
     Todo,
 }
 
+internal enum class WorkspacePage(val index: Int) {
+    Calendar(0),
+    Today(1),
+    Todo(2),
+}
+
 private enum class ConnectionIndicator {
     Checking,
     Connected,
@@ -351,6 +364,12 @@ private data class BackendConnectionState(
     val indicator: ConnectionIndicator = ConnectionIndicator.NotConnected,
     val label: String = "未连接",
     val detail: String = "",
+)
+
+internal data class StatisticsDisplayModel(
+    val startedAtLabel: String,
+    val completedSchedules: Int,
+    val completedTodos: Int,
 )
 
 private data class EditableProposalDraft(
@@ -444,6 +463,19 @@ private fun Modifier.commitmentLongPressMenu(
         }
 }
 
+internal fun settleWorkspacePage(
+    currentPage: WorkspacePage,
+    totalDragX: Float,
+    thresholdPx: Float,
+): WorkspacePage {
+    val targetIndex = when {
+        totalDragX > thresholdPx -> currentPage.index - 1
+        totalDragX < -thresholdPx -> currentPage.index + 1
+        else -> currentPage.index
+    }.coerceIn(WorkspacePage.Calendar.index, WorkspacePage.Todo.index)
+    return WorkspacePage.values().first { it.index == targetIndex }
+}
+
 @Composable
 fun FuckTheDdlApp(
     initialState: ScheduleShellState,
@@ -467,8 +499,16 @@ fun FuckTheDdlApp(
         shellState.tabs.firstOrNull { it.destination == TabDestination.Todo }
             ?: ScheduleTab(label = "待办", destination = TabDestination.Todo)
     }
-    var selectedTab by remember { mutableStateOf(if (initialState.selectedTab.destination == TabDestination.Todo) todoTab else todayTab) }
-    var showingCalendar by remember { mutableStateOf(false) }
+    var workspacePage by remember {
+        mutableStateOf(
+            if (initialState.selectedTab.destination == TabDestination.Todo) {
+                WorkspacePage.Todo
+            } else {
+                WorkspacePage.Today
+            }
+        )
+    }
+    val selectedTab = if (workspacePage == WorkspacePage.Todo) todoTab else todayTab
     var showingSettings by remember { mutableStateOf(false) }
     var activeEditTarget by remember { mutableStateOf<CommitmentEditTarget?>(null) }
     var createMenuVisible by remember { mutableStateOf(false) }
@@ -567,12 +607,10 @@ fun FuckTheDdlApp(
                 BottomWorkspace(
                     selectedTab = selectedTab,
                     onTodaySelected = {
-                        selectedTab = todayTab
-                        showingCalendar = false
+                        workspacePage = WorkspacePage.Today
                     },
                     onTodoSelected = {
-                        selectedTab = todoTab
-                        showingCalendar = false
+                        workspacePage = WorkspacePage.Todo
                     },
                     agentApiClient = agentApiClient,
                     asrClient = asrClient,
@@ -596,57 +634,24 @@ fun FuckTheDdlApp(
                     CompactHeader(
                         connectionState = backendConnectionState,
                         onDateClick = {
-                            selectedTab = todayTab
-                            showingCalendar = true
+                            workspacePage = WorkspacePage.Calendar
                         },
                         onSettingsClick = { showingSettings = true },
                     )
-                    when {
-                        showingCalendar -> CalendarSurface(
-                            events = shellState.events,
-                            todos = shellState.todos,
-                            onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target ->
-                                activeEditTarget = target
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .verticalScroll(rememberScrollState()),
-                        )
-
-                        selectedTab.destination == TabDestination.Today -> TodayTimeline(
-                            events = shellState.events,
-                            todos = shellState.todos,
-                            onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target ->
-                                activeEditTarget = target
-                            },
-                            onToggleTodo = { todo -> updateCommitment(todo.toggleDoneProposal()) },
-                            modifier = Modifier.weight(1f),
-                        )
-
-                        selectedTab.destination == TabDestination.Todo -> TodoSurface(
-                            todos = shellState.todos,
-                            onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target ->
-                                activeEditTarget = target
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .verticalScroll(rememberScrollState()),
-                        )
-
-                        else -> TodayTimeline(
-                            events = shellState.events,
-                            todos = shellState.todos,
-                            onDeleteCommitment = ::deleteCommitment,
-                            onEditCommitment = { target ->
-                                activeEditTarget = target
-                            },
-                            onToggleTodo = { todo -> updateCommitment(todo.toggleDoneProposal()) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
+                    WorkspacePager(
+                        currentPage = workspacePage,
+                        events = shellState.events,
+                        todos = shellState.todos,
+                        onDeleteCommitment = ::deleteCommitment,
+                        onEditCommitment = { target ->
+                            activeEditTarget = target
+                        },
+                        onToggleTodo = { todo -> updateCommitment(todo.toggleDoneProposal()) },
+                        onPageSettled = { page ->
+                            workspacePage = page
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
                 }
                 activeEditTarget?.let { target ->
                     CommitmentEditOverlay(
@@ -1188,59 +1193,112 @@ private fun StatisticsPanel(
     todos: List<TodoItem>,
     onBack: () -> Unit,
 ) {
-    val today = LocalDate.now()
+    val stats = buildStatisticsDisplayModel(events = events, todos = todos)
     SettingsHeader(title = "统计", onBack = onBack)
-
-    fun countCompletedSchedulesInMonth(): Int {
-        return events.count { event ->
-            runCatching { LocalDate.parse(event.date) }.getOrNull()?.let { d ->
-                d < today && d.month == today.month && d.year == today.year
-            } ?: false
-        }
-    }
-
-    fun countCompletedTodosInMonth(): Int {
-        return todos.count { todo ->
-            todo.done && runCatching { LocalDate.parse(todo.dueDate) }.getOrNull()?.let { d ->
-                d.month == today.month && d.year == today.year
-            } ?: false
-        }
-    }
-
-    val monthlySchedules = countCompletedSchedulesInMonth()
-    val monthlyTodos = countCompletedTodosInMonth()
-    val totalSchedules = events.count { event ->
-        runCatching { LocalDate.parse(event.date) }.getOrNull()?.let { it < today } ?: false
-    }
-    val totalTodos = todos.count { it.done }
-
-    SettingsGroupTitle("本月")
-    Surface(
-        color = AccentSoft.copy(alpha = 0.42f),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(16.dp)),
+    SettingsGroupTitle("自 ${stats.startedAtLabel} 起，一共完成")
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            StatItem(label = "日程", count = monthlySchedules, color = Amber)
-            StatItem(label = "待办", count = monthlyTodos, color = Success)
-        }
+        FlipCalendarCounter(
+            title = "日程",
+            count = stats.completedSchedules,
+            color = Amber,
+            modifier = Modifier.weight(1f),
+        )
+        FlipCalendarCounter(
+            title = "待办",
+            count = stats.completedTodos,
+            color = Success,
+            startDelayMillis = 90,
+            modifier = Modifier.weight(1f),
+        )
     }
+}
 
-    SettingsGroupTitle("累计")
+@Composable
+private fun FlipCalendarCounter(
+    title: String,
+    count: Int,
+    color: Color,
+    modifier: Modifier = Modifier,
+    startDelayMillis: Long = 0,
+) {
+    val view = LocalView.current
+    val counter = remember(count) { Animatable(0f) }
+    val displayedCount = counter.value.roundToInt().coerceIn(0, count.coerceAtLeast(0))
+    val counterFontSize = statisticsCounterFontSize(count)
+    val flipPulse = 1f - abs((counter.value % 1f) - 0.5f) * 2f
+    LaunchedEffect(count) {
+        counter.snapTo(0f)
+        delay(startDelayMillis)
+        val tickJob = launch {
+            val ticks = if (count <= 0) 0 else count.coerceIn(4, 22)
+            repeat(ticks) {
+                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                delay(34)
+            }
+        }
+        counter.animateTo(
+            targetValue = count.toFloat(),
+            animationSpec = tween(durationMillis = 880),
+        )
+        tickJob.cancel()
+    }
     Surface(
-        color = AccentSoft.copy(alpha = 0.42f),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(16.dp)),
+        color = Panel,
+        shape = RoundedCornerShape(18.dp),
+        modifier = modifier.border(1.dp, Divider, RoundedCornerShape(18.dp)),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp),
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(bottom = 14.dp),
         ) {
-            StatItem(label = "日程", count = totalSchedules, color = Amber)
-            StatItem(label = "待办", count = totalTodos, color = Success)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(30.dp)
+                    .background(color.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(modifier = Modifier.size(5.dp).background(color, RoundedCornerShape(999.dp)))
+                    Text(text = title, color = color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Box(modifier = Modifier.size(5.dp).background(color, RoundedCornerShape(999.dp)))
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(86.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Canvas),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Divider.copy(alpha = 0.82f)),
+                )
+                Text(
+                    text = displayedCount.toString(),
+                    color = Ink,
+                    fontSize = counterFontSize.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.graphicsLayer {
+                        rotationX = flipPulse * 42f
+                        cameraDistance = 18f * density
+                    },
+                )
+            }
+            Text(text = "已完成", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -1519,6 +1577,178 @@ private fun SettingsInfoRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+internal fun buildStatisticsDisplayModel(
+    events: List<ScheduleEvent>,
+    todos: List<TodoItem>,
+    today: LocalDate = LocalDate.now(),
+): StatisticsDisplayModel {
+    val completedScheduleDates = events.mapNotNull { event ->
+        runCatching { LocalDate.parse(event.date) }.getOrNull()?.takeIf { it < today }
+    }
+    val completedTodoDates = todos.mapNotNull { todo ->
+        runCatching { LocalDate.parse(todo.dueDate) }.getOrNull()?.takeIf { todo.done }
+    }
+    val startDate = (completedScheduleDates + completedTodoDates).minOrNull() ?: today
+    return StatisticsDisplayModel(
+        startedAtLabel = startDate.format(DateTimeFormatter.ofPattern("yyyy.MM.dd")),
+        completedSchedules = completedScheduleDates.size,
+        completedTodos = todos.count { it.done },
+    )
+}
+
+internal fun statisticsCounterFontSize(count: Int): Int {
+    return when {
+        count >= 10000 -> 28
+        count >= 1000 -> 32
+        else -> 36
+    }
+}
+
+@Composable
+private fun WorkspacePager(
+    currentPage: WorkspacePage,
+    events: List<ScheduleEvent>,
+    todos: List<TodoItem>,
+    onDeleteCommitment: (String) -> Unit,
+    onEditCommitment: CommitmentEditRequester,
+    onToggleTodo: (TodoItem) -> Unit,
+    onPageSettled: (WorkspacePage) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val thresholdPx = with(LocalDensity.current) { 72.dp.toPx() }
+    var widthPx by remember { mutableStateOf(0f) }
+    var dragOffsetX by remember { mutableStateOf(0f) }
+    val trackOffsetX = remember { Animatable(0f) }
+    var trackInitialized by remember { mutableStateOf(false) }
+    val animatedDragOffsetX by animateFloatAsState(
+        targetValue = dragOffsetX,
+        animationSpec = spring(dampingRatio = 0.82f, stiffness = 700f),
+        label = "workspace-drag-offset",
+    )
+    LaunchedEffect(currentPage, widthPx) {
+        if (widthPx <= 0f) {
+            return@LaunchedEffect
+        }
+        val target = -currentPage.index * widthPx
+        if (!trackInitialized) {
+            trackOffsetX.snapTo(target)
+            trackInitialized = true
+        } else {
+            trackOffsetX.animateTo(
+                targetValue = target,
+                animationSpec = spring(dampingRatio = 0.86f, stiffness = 420f),
+            )
+        }
+    }
+    val pageOffsetX = (trackOffsetX.value + animatedDragOffsetX)
+        .coerceIn(-WorkspacePage.Todo.index * widthPx, 0f)
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .clipToBounds()
+            .onGloballyPositioned { coordinates ->
+                widthPx = coordinates.size.width.toFloat()
+            }
+            .pointerInput(currentPage, thresholdPx, widthPx) {
+                detectHorizontalDragGestures(
+                    onDragStart = { dragOffsetX = 0f },
+                    onDragCancel = { dragOffsetX = 0f },
+                    onDragEnd = {
+                        val nextPage = settleWorkspacePage(
+                            currentPage = currentPage,
+                            totalDragX = dragOffsetX,
+                            thresholdPx = thresholdPx,
+                        )
+                        onPageSettled(nextPage)
+                        dragOffsetX = 0f
+                    },
+                    onHorizontalDrag = { change, dragAmount ->
+                        val canMoveTrack = dragOffsetX != 0f ||
+                            (dragAmount > 0f && currentPage.index > WorkspacePage.Calendar.index) ||
+                            (dragAmount < 0f && currentPage.index < WorkspacePage.Todo.index)
+                        if (!canMoveTrack) {
+                            return@detectHorizontalDragGestures
+                        }
+                        change.consume()
+                        dragOffsetX = (dragOffsetX + dragAmount).coerceIn(-widthPx, widthPx)
+                    },
+                )
+            },
+    ) {
+        if (widthPx <= 0f) {
+            when (currentPage) {
+                WorkspacePage.Calendar -> CalendarSurface(
+                    events = events,
+                    todos = todos,
+                    onDeleteCommitment = onDeleteCommitment,
+                    onEditCommitment = onEditCommitment,
+                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                )
+                WorkspacePage.Today -> TodayTimeline(
+                    events = events,
+                    todos = todos,
+                    onDeleteCommitment = onDeleteCommitment,
+                    onEditCommitment = onEditCommitment,
+                    onToggleTodo = onToggleTodo,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                WorkspacePage.Todo -> TodoSurface(
+                    todos = todos,
+                    onDeleteCommitment = onDeleteCommitment,
+                    onEditCommitment = onEditCommitment,
+                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                )
+            }
+            return@Box
+        }
+        CalendarSurface(
+            events = events,
+            todos = todos,
+            onDeleteCommitment = onDeleteCommitment,
+            onEditCommitment = onEditCommitment,
+            modifier = Modifier
+                .fillMaxSize()
+                .offset {
+                    IntOffset(
+                        x = (WorkspacePage.Calendar.index * widthPx + pageOffsetX).roundToInt(),
+                        y = 0,
+                    )
+                }
+                .verticalScroll(rememberScrollState()),
+        )
+        TodayTimeline(
+            events = events,
+            todos = todos,
+            onDeleteCommitment = onDeleteCommitment,
+            onEditCommitment = onEditCommitment,
+            onToggleTodo = onToggleTodo,
+            modifier = Modifier
+                .fillMaxSize()
+                .offset {
+                    IntOffset(
+                        x = (WorkspacePage.Today.index * widthPx + pageOffsetX).roundToInt(),
+                        y = 0,
+                    )
+                },
+        )
+        TodoSurface(
+            todos = todos,
+            onDeleteCommitment = onDeleteCommitment,
+            onEditCommitment = onEditCommitment,
+            modifier = Modifier
+                .fillMaxSize()
+                .offset {
+                    IntOffset(
+                        x = (WorkspacePage.Todo.index * widthPx + pageOffsetX).roundToInt(),
+                        y = 0,
+                    )
+                }
+                .verticalScroll(rememberScrollState()),
+        )
     }
 }
 
@@ -2334,11 +2564,20 @@ private fun TimePickerField(
     }
 
     if (showDialog) {
+        val view = LocalView.current
         val timePickerState = rememberTimePickerState(
             initialHour = hour,
             initialMinute = minute,
             is24Hour = true,
         )
+        var lastHapticTime by remember { mutableStateOf(hour to minute) }
+        LaunchedEffect(timePickerState.hour, timePickerState.minute) {
+            val current = timePickerState.hour to timePickerState.minute
+            if (current != lastHapticTime) {
+                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                lastHapticTime = current
+            }
+        }
 
         val pickerColors = TimePickerDefaults.colors(
             containerColor = Panel,
