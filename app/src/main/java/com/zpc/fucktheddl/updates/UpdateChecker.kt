@@ -65,7 +65,7 @@ class UpdateChecker(
             connection.connectTimeout = 5000
             connection.readTimeout = 5000
             connection.requestMethod = "GET"
-            connection.setRequestProperty("Accept", "application/vnd.github+json")
+            connection.setRequestProperty("Accept", "application/json,text/plain,*/*")
             return connection.inputStream.bufferedReader().use { it.readText() }
         }
     }
