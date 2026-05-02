@@ -72,6 +72,23 @@ class RoomQuestRepositoryTest {
         }
     }
 
+    @Test
+    fun nodesCanBeNestedBeyondTheFirstChildLevel() {
+        withRepository { repo ->
+            val book = repo.createBook(QuestBookKind.Main, "主线", "", "", "")
+            var parentId: String? = null
+
+            repeat(8) { depth ->
+                parentId = repo.createNode(book.id, parentId = parentId, title = "第${depth + 1}层").id
+            }
+
+            val nodesByTitle = repo.getBookTree(book.id)?.nodes.orEmpty().associateBy { it.title }
+            assertEquals(null, nodesByTitle.getValue("第1层").parentId)
+            assertEquals(nodesByTitle.getValue("第1层").id, nodesByTitle.getValue("第2层").parentId)
+            assertEquals(nodesByTitle.getValue("第7层").id, nodesByTitle.getValue("第8层").parentId)
+        }
+    }
+
     private fun withRepository(block: (RoomQuestRepository) -> Unit) {
         val db = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),

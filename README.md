@@ -97,13 +97,13 @@ cd fucktheddl
 Debug APK 输出位置：
 
 ```text
-app/build/outputs/apk/debug/DDLAgent-v0.2.3.apk
+app/build/outputs/apk/debug/DDLAgent-v0.2.4.apk
 ```
 
 Release APK 输出位置：
 
 ```text
-app/build/outputs/apk/release/DDLAgent-v0.2.3.apk
+app/build/outputs/apk/release/DDLAgent-v0.2.4.apk
 ```
 
 ## 应用内配置

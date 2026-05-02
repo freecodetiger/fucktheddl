@@ -33,8 +33,8 @@ android {
         applicationId = "com.zpc.fucktheddl"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.2.3"
+        versionCode = 11
+        versionName = "0.2.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "AGENT_BASE_URL", "\"$agentBaseUrl\"")

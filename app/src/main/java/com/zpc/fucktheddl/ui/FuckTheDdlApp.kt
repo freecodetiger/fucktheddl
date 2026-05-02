@@ -24,6 +24,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -427,11 +428,15 @@ private data class EditableProposalDraft(
     }
 }
 
-private data class QuestVisibleNode(
+internal data class QuestVisibleNode(
     val node: QuestNode,
     val depth: Int,
     val childCount: Int,
 )
+
+internal const val QuestNodeIndentStepDp = 18
+
+internal fun questNodeIndentDp(depth: Int): Int = depth.coerceAtLeast(0) * QuestNodeIndentStepDp
 
 private data class QuestBookEditorState(
     val kind: QuestBookKind,
@@ -2637,13 +2642,15 @@ private fun QuestTreeBook(
                 }
             }
         }
-        QuickQuestAddRow(
-            parentLabel = quickAddParentId?.let { id -> tree.nodes.firstOrNull { it.id == id }?.title } ?: "顶层目标",
-            title = quickTitle,
-            onTitleChange = onQuickTitleChange,
-            onSubmit = onQuickAdd,
-            onTopLevel = { onSetQuickParent(null) },
-        )
+        if (quickAddParentId == null) {
+            QuickQuestAddRow(
+                parentLabel = "顶层目标",
+                title = quickTitle,
+                onTitleChange = onQuickTitleChange,
+                onSubmit = onQuickAdd,
+                onTopLevel = { onSetQuickParent(null) },
+            )
+        }
         if (visibleRows.isEmpty()) {
             EmptyState(title = "这本书还没有目标", detail = "先添加一个顶层目标，再继续拆成子目标。")
         } else {
@@ -2652,9 +2659,19 @@ private fun QuestTreeBook(
                     row = row,
                     onToggleDone = { onToggleNode(row.node) },
                     onToggleExpanded = { onToggleExpanded(row.node) },
-                    onAddChild = { onSetQuickParent(row.node.id) },
+                    onAddChild = {
+                        if (!row.node.expanded) {
+                            onToggleExpanded(row.node)
+                        }
+                        onSetQuickParent(row.node.id)
+                    },
                     onEdit = { onEditNode(row.node) },
                     onDelete = { onDeleteNode(row.node) },
+                    quickAddActive = quickAddParentId == row.node.id,
+                    quickTitle = quickTitle,
+                    onQuickTitleChange = onQuickTitleChange,
+                    onQuickAdd = onQuickAdd,
+                    onTopLevelAdd = { onSetQuickParent(null) },
                 )
             }
         }
@@ -2669,11 +2686,12 @@ private fun QuickQuestAddRow(
     onTitleChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onTopLevel: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Surface(
         color = AccentSoft.copy(alpha = 0.5f),
         shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(18.dp)),
+        modifier = modifier.fillMaxWidth().border(1.dp, Divider, RoundedCornerShape(18.dp)),
     ) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -2712,69 +2730,86 @@ private fun QuestNodeRow(
     onAddChild: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    quickAddActive: Boolean,
+    quickTitle: String,
+    onQuickTitleChange: (String) -> Unit,
+    onQuickAdd: () -> Unit,
+    onTopLevelAdd: () -> Unit,
 ) {
     val node = row.node
-    val indent = (row.depth * 18).coerceAtMost(72).dp
-    Surface(
-        color = if (node.done) SuccessSoft.copy(alpha = 0.62f) else Panel,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = indent)
-            .border(1.dp, Divider, RoundedCornerShape(16.dp)),
-    ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = if (row.childCount > 0) {
-                        if (node.expanded) "⌄" else "›"
-                    } else {
-                        "•"
-                    },
-                    color = Muted,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .size(28.dp)
-                        .pressFeedbackClick(
-                            onClick = if (row.childCount > 0) onToggleExpanded else ({ }),
-                            pressedScale = 0.9f,
-                        ),
-                    textAlign = TextAlign.Center,
-                )
-                Surface(
-                    color = if (node.done) Success else Color.Transparent,
-                    shape = RoundedCornerShape(999.dp),
-                    modifier = Modifier
-                        .size(24.dp)
-                        .border(1.5.dp, if (node.done) Success else Muted, RoundedCornerShape(999.dp))
-                        .pressFeedbackClick(onClick = onToggleDone, pressedScale = 0.88f),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        if (node.done) {
-                            Text("✓", color = readableOn(Success), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    val indent = questNodeIndentDp(row.depth).dp
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(
+            color = if (node.done) SuccessSoft.copy(alpha = 0.62f) else Panel,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = indent)
+                .border(1.dp, Divider, RoundedCornerShape(16.dp)),
+        ) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (row.childCount > 0) {
+                            if (node.expanded) "⌄" else "›"
+                        } else {
+                            "•"
+                        },
+                        color = Muted,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .pressFeedbackClick(
+                                onClick = if (row.childCount > 0) onToggleExpanded else ({ }),
+                                pressedScale = 0.9f,
+                            ),
+                        textAlign = TextAlign.Center,
+                    )
+                    Surface(
+                        color = if (node.done) Success else Color.Transparent,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier
+                            .size(24.dp)
+                            .border(1.5.dp, if (node.done) Success else Muted, RoundedCornerShape(999.dp))
+                            .pressFeedbackClick(onClick = onToggleDone, pressedScale = 0.88f),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (node.done) {
+                                Text("✓", color = readableOn(Success), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = node.title,
+                            color = if (node.done) Muted else Ink,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            textDecoration = if (node.done) TextDecoration.LineThrough else TextDecoration.None,
+                        )
+                        QuestMetaLine(location = node.location, targetDate = node.targetDate)
+                    }
                 }
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = node.title,
-                        color = if (node.done) Muted else Ink,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        textDecoration = if (node.done) TextDecoration.LineThrough else TextDecoration.None,
-                    )
-                    QuestMetaLine(location = node.location, targetDate = node.targetDate)
+                if (node.description.isNotBlank()) {
+                    Text(text = node.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextAction(text = "+ 子目标", onClick = onAddChild)
+                    TextAction(text = "编辑", onClick = onEdit)
+                    TextAction(text = "删除", color = Danger, onClick = onDelete)
                 }
             }
-            if (node.description.isNotBlank()) {
-                Text(text = node.description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextAction(text = "+ 子目标", onClick = onAddChild)
-                TextAction(text = "编辑", onClick = onEdit)
-                TextAction(text = "删除", color = Danger, onClick = onDelete)
-            }
+        }
+        if (quickAddActive) {
+            QuickQuestAddRow(
+                parentLabel = node.title,
+                title = quickTitle,
+                onTitleChange = onQuickTitleChange,
+                onSubmit = onQuickAdd,
+                onTopLevel = onTopLevelAdd,
+                modifier = Modifier.padding(start = questNodeIndentDp(row.depth + 1).dp),
+            )
         }
     }
 }
@@ -2979,7 +3014,7 @@ private fun QuestDeleteConfirmOverlay(
     }
 }
 
-private fun visibleQuestRows(nodes: List<QuestNode>): List<QuestVisibleNode> {
+internal fun visibleQuestRows(nodes: List<QuestNode>): List<QuestVisibleNode> {
     val byParent = nodes.groupBy { it.parentId }
     val result = mutableListOf<QuestVisibleNode>()
 
@@ -3684,7 +3719,7 @@ private fun DatePickerField(
     }
     var showDialog by remember { mutableStateOf(false) }
 
-    Box(modifier = modifier.pressFeedbackClick(onClick = { showDialog = true }, pressedScale = 0.98f)) {
+    PickerFieldContainer(modifier = modifier) {
         OutlinedTextField(
             value = displayText ?: "",
             onValueChange = {},
@@ -3697,6 +3732,7 @@ private fun DatePickerField(
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = { Text("▾", fontSize = 12.sp, color = Muted) },
         )
+        PickerFieldTapTarget(onClick = { showDialog = true })
     }
 
     if (showDialog) {
@@ -3787,7 +3823,7 @@ private fun TimePickerField(
         h to m
     }
 
-    Box(modifier = modifier.pressFeedbackClick(onClick = { showDialog = true }, pressedScale = 0.98f)) {
+    PickerFieldContainer(modifier = modifier) {
         OutlinedTextField(
             value = value,
             onValueChange = {},
@@ -3799,6 +3835,7 @@ private fun TimePickerField(
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = { Text("▾", fontSize = 12.sp, color = Muted) },
         )
+        PickerFieldTapTarget(onClick = { showDialog = true })
     }
 
     if (showDialog) {
@@ -3870,6 +3907,25 @@ private fun TimePickerField(
             }
         }
     }
+}
+
+@Composable
+private fun PickerFieldContainer(
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(modifier = modifier, content = content)
+}
+
+@Composable
+private fun BoxScope.PickerFieldTapTarget(
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .matchParentSize()
+            .pressFeedbackClick(onClick = onClick, pressedScale = 0.98f),
+    )
 }
 
 @Composable
