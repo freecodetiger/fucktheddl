@@ -11,7 +11,7 @@ data class UpdateCheckResult(
 )
 
 class UpdateChecker(
-    private val fetchLatestReleaseJson: () -> String = { httpGet(GitHubLatestReleaseUrl) },
+    private val fetchLatestReleaseJson: () -> String = { httpGet(LatestVersionUrl) },
 ) {
     fun check(currentVersion: String): UpdateCheckResult {
         return runCatching {
@@ -32,12 +32,12 @@ class UpdateChecker(
     companion object {
         const val ProductReleasePageUrl = "https://ddlagent.praw.top"
         const val GitHubReleasePageUrl = "https://github.com/freecodetiger/fucktheddl/releases"
-        private const val GitHubLatestReleaseUrl = "https://api.github.com/repos/freecodetiger/fucktheddl/releases/latest"
+        private const val LatestVersionUrl = "https://ddlagent.praw.top/version.json"
 
         fun extractTagName(json: String): String {
             val match = Regex(""""tag_name"\s*:\s*"([^"]+)"""").find(json)
             return match?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
-                ?: error("GitHub Release 没有版本号")
+                ?: error("版本信息解析失败")
         }
 
         fun compareVersions(left: String, right: String): Int {
