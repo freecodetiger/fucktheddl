@@ -1,20 +1,27 @@
 package com.zpc.fucktheddl
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.Build
+import android.os.PowerManager
 import android.content.pm.PackageManager
-import android.content.Context
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.room.Room
 import com.zpc.fucktheddl.agent.AgentConnectionSettings
 import com.zpc.fucktheddl.agent.DEFAULT_ALIYUN_ASR_URL
@@ -25,6 +32,7 @@ import com.zpc.fucktheddl.commitments.room.LocalOwnerUserId
 import com.zpc.fucktheddl.commitments.room.MIGRATION_1_2
 import com.zpc.fucktheddl.commitments.room.RoomCommitmentRepository
 import com.zpc.fucktheddl.notifications.DailyReminderScheduler
+import com.zpc.fucktheddl.notifications.DailyReminderNotifier
 import com.zpc.fucktheddl.notifications.DailyReminderSettingsStore
 import com.zpc.fucktheddl.quests.RoomQuestRepository
 import com.zpc.fucktheddl.schedule.StarterScheduleRepository
@@ -60,6 +68,15 @@ class MainActivity : ComponentActivity() {
                 var notificationPermissionGranted by remember {
                     mutableStateOf(hasNotificationPermission())
                 }
+                var exactAlarmPermissionGranted by remember {
+                    mutableStateOf(reminderScheduler.canScheduleExactAlarms())
+                }
+                var batteryOptimizationIgnored by remember {
+                    mutableStateOf(isIgnoringBatteryOptimizations())
+                }
+                var dailyReminderChannelEnabled by remember {
+                    mutableStateOf(DailyReminderNotifier.isChannelEnabled(this@MainActivity))
+                }
                 val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestPermission(),
                 ) { granted ->
@@ -67,6 +84,30 @@ class MainActivity : ComponentActivity() {
                     if (granted && dailyReminderSettings.enabled) {
                         reminderScheduler.apply(dailyReminderSettings)
                     }
+                }
+                fun refreshReminderReliabilityState() {
+                    notificationPermissionGranted = hasNotificationPermission()
+                    exactAlarmPermissionGranted = reminderScheduler.canScheduleExactAlarms()
+                    batteryOptimizationIgnored = isIgnoringBatteryOptimizations()
+                    dailyReminderChannelEnabled = DailyReminderNotifier.isChannelEnabled(this@MainActivity)
+                }
+                LaunchedEffect(dailyReminderSettings.enabled, dailyReminderSettings.hour, dailyReminderSettings.minute) {
+                    refreshReminderReliabilityState()
+                    if (dailyReminderSettings.enabled) {
+                        reminderScheduler.apply(dailyReminderSettings)
+                    }
+                }
+                DisposableEffect(dailyReminderSettings) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            refreshReminderReliabilityState()
+                            if (dailyReminderSettings.enabled) {
+                                reminderScheduler.apply(dailyReminderSettings)
+                            }
+                        }
+                    }
+                    lifecycle.addObserver(observer)
+                    onDispose { lifecycle.removeObserver(observer) }
                 }
                 val localAgentClient = remember { LocalAgentClient() }
                 val asrClient = remember(connectionSettings.aliyunApiKey, connectionSettings.aliyunAsrUrl) {
@@ -109,6 +150,9 @@ class MainActivity : ComponentActivity() {
                     },
                     dailyReminderSettings = dailyReminderSettings,
                     notificationPermissionGranted = notificationPermissionGranted,
+                    exactAlarmPermissionGranted = exactAlarmPermissionGranted,
+                    batteryOptimizationIgnored = batteryOptimizationIgnored,
+                    dailyReminderChannelEnabled = dailyReminderChannelEnabled,
                     onDailyReminderSettingsChanged = { settings ->
                         reminderSettingsStore.save(settings)
                         dailyReminderSettings = settings
@@ -117,9 +161,10 @@ class MainActivity : ComponentActivity() {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             }
-                        } else {
-                            notificationPermissionGranted = hasNotificationPermission()
+                        } else if (settings.enabled && !reminderScheduler.canScheduleExactAlarms()) {
+                            requestExactAlarmPermission()
                         }
+                        refreshReminderReliabilityState()
                     },
                     onRequestNotificationPermission = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -128,6 +173,9 @@ class MainActivity : ComponentActivity() {
                             notificationPermissionGranted = true
                         }
                     },
+                    onRequestExactAlarmPermission = ::requestExactAlarmPermission,
+                    onRequestBatteryOptimization = ::requestBatteryOptimizationExemption,
+                    onOpenNotificationSettings = ::openDailyReminderNotificationSettings,
                 )
             }
         }
@@ -136,6 +184,57 @@ class MainActivity : ComponentActivity() {
     private fun hasNotificationPermission(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestExactAlarmPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+            .setData(Uri.parse("package:$packageName"))
+        runCatching {
+            startActivity(intent)
+        }.onFailure {
+            openAppDetailsSettings()
+        }
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        return getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || isIgnoringBatteryOptimizations()) return
+        val packageUri = Uri.parse("package:$packageName")
+        val requestIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).setData(packageUri)
+        runCatching {
+            startActivity(requestIntent)
+        }.onFailure {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+    }
+
+    private fun openDailyReminderNotificationSettings() {
+        DailyReminderNotifier(this).ensureChannel()
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, DailyReminderNotifier.ChannelId)
+        } else {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        }
+        runCatching {
+            startActivity(intent)
+        }.onFailure {
+            openAppDetailsSettings()
+        }
+    }
+
+    private fun openAppDetailsSettings() {
+        startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:$packageName")),
+        )
     }
 }
 

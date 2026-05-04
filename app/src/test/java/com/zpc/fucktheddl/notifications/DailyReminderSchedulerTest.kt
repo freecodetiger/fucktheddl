@@ -30,4 +30,20 @@ class DailyReminderSchedulerTest {
             Instant.ofEpochMilli(trigger).toString(),
         )
     }
+
+    @Test
+    fun alarmModeUsesExactWhenPermissionIsAvailable() {
+        assertEquals(
+            DailyReminderScheduler.AlarmMode.ExactWhileIdle,
+            DailyReminderScheduler.alarmMode(canScheduleExactAlarms = true),
+        )
+    }
+
+    @Test
+    fun alarmModeFallsBackWhenExactPermissionIsMissing() {
+        assertEquals(
+            DailyReminderScheduler.AlarmMode.AllowWhileIdle,
+            DailyReminderScheduler.alarmMode(canScheduleExactAlarms = false),
+        )
+    }
 }

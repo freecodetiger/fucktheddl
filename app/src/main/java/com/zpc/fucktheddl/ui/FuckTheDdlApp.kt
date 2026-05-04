@@ -596,6 +596,9 @@ fun FuckTheDdlApp(
     themeMode: AppThemeMode = AppThemeMode.ClassicLight,
     dailyReminderSettings: DailyReminderSettings = DailyReminderSettings(),
     notificationPermissionGranted: Boolean = true,
+    exactAlarmPermissionGranted: Boolean = true,
+    batteryOptimizationIgnored: Boolean = true,
+    dailyReminderChannelEnabled: Boolean = true,
     agentClient: AgentClient? = LocalAgentClient(),
     asrClient: RealtimeAsrClient? = null,
     commitmentsProvider: () -> AgentCommitmentsPayload = { AgentCommitmentsPayload(emptyList(), emptyList()) },
@@ -617,6 +620,9 @@ fun FuckTheDdlApp(
     onThemeModeChanged: (AppThemeMode) -> Unit = {},
     onDailyReminderSettingsChanged: (DailyReminderSettings) -> Unit = {},
     onRequestNotificationPermission: () -> Unit = {},
+    onRequestExactAlarmPermission: () -> Unit = {},
+    onRequestBatteryOptimization: () -> Unit = {},
+    onOpenNotificationSettings: () -> Unit = {},
 ) {
     var shellState by remember { mutableStateOf(initialState) }
     val todayTab = remember(shellState.tabs) {
@@ -956,11 +962,17 @@ fun FuckTheDdlApp(
                     themeMode = themeMode,
                     dailyReminderSettings = dailyReminderSettings,
                     notificationPermissionGranted = notificationPermissionGranted,
+                    exactAlarmPermissionGranted = exactAlarmPermissionGranted,
+                    batteryOptimizationIgnored = batteryOptimizationIgnored,
+                    dailyReminderChannelEnabled = dailyReminderChannelEnabled,
                     events = shellState.events,
                     todos = shellState.todos,
                     onThemeModeChanged = onThemeModeChanged,
                     onDailyReminderSettingsChanged = onDailyReminderSettingsChanged,
                     onRequestNotificationPermission = onRequestNotificationPermission,
+                    onRequestExactAlarmPermission = onRequestExactAlarmPermission,
+                    onRequestBatteryOptimization = onRequestBatteryOptimization,
+                    onOpenNotificationSettings = onOpenNotificationSettings,
                     onTestConnection = ::testLocalServices,
                     onSave = { settings ->
                         val shouldRetest = settings.serviceTestKey() != connectionSettings.serviceTestKey()
@@ -1063,11 +1075,17 @@ private fun ConnectionSettingsOverlay(
     themeMode: AppThemeMode,
     dailyReminderSettings: DailyReminderSettings,
     notificationPermissionGranted: Boolean,
+    exactAlarmPermissionGranted: Boolean,
+    batteryOptimizationIgnored: Boolean,
+    dailyReminderChannelEnabled: Boolean,
     events: List<ScheduleEvent>,
     todos: List<TodoItem>,
     onThemeModeChanged: (AppThemeMode) -> Unit,
     onDailyReminderSettingsChanged: (DailyReminderSettings) -> Unit,
     onRequestNotificationPermission: () -> Unit,
+    onRequestExactAlarmPermission: () -> Unit,
+    onRequestBatteryOptimization: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onTestConnection: (AgentConnectionSettings) -> Unit,
     onSave: (AgentConnectionSettings) -> Unit,
     onClose: () -> Unit,
@@ -1159,6 +1177,9 @@ private fun ConnectionSettingsOverlay(
                             themeMode = themeMode,
                             dailyReminderSettings = dailyReminderSettings,
                             notificationPermissionGranted = notificationPermissionGranted,
+                            exactAlarmPermissionGranted = exactAlarmPermissionGranted,
+                            batteryOptimizationIgnored = batteryOptimizationIgnored,
+                            dailyReminderChannelEnabled = dailyReminderChannelEnabled,
                             versionLabel = versionLabel,
                             onConnectionClick = { panel = SettingsPanel.Connection },
                             onDailyReminderClick = { panel = SettingsPanel.DailyReminder },
@@ -1198,8 +1219,14 @@ private fun ConnectionSettingsOverlay(
                         SettingsPanel.DailyReminder -> DailyReminderSettingsMenu(
                             settings = dailyReminderSettings,
                             notificationPermissionGranted = notificationPermissionGranted,
+                            exactAlarmPermissionGranted = exactAlarmPermissionGranted,
+                            batteryOptimizationIgnored = batteryOptimizationIgnored,
+                            dailyReminderChannelEnabled = dailyReminderChannelEnabled,
                             onSettingsChanged = onDailyReminderSettingsChanged,
                             onRequestNotificationPermission = onRequestNotificationPermission,
+                            onRequestExactAlarmPermission = onRequestExactAlarmPermission,
+                            onRequestBatteryOptimization = onRequestBatteryOptimization,
+                            onOpenNotificationSettings = onOpenNotificationSettings,
                             onBack = { panel = SettingsPanel.Root },
                         )
 
@@ -1233,6 +1260,9 @@ private fun SettingsRootMenu(
     themeMode: AppThemeMode,
     dailyReminderSettings: DailyReminderSettings,
     notificationPermissionGranted: Boolean,
+    exactAlarmPermissionGranted: Boolean,
+    batteryOptimizationIgnored: Boolean,
+    dailyReminderChannelEnabled: Boolean,
     versionLabel: String,
     onConnectionClick: () -> Unit,
     onDailyReminderClick: () -> Unit,
@@ -1257,7 +1287,11 @@ private fun SettingsRootMenu(
     )
     SettingsMenuRow(
         title = "每日提醒",
-        detail = dailyReminderSettings.reminderDetail(notificationPermissionGranted),
+        detail = dailyReminderSettings.reminderDetail(
+            notificationPermissionGranted = notificationPermissionGranted,
+            exactAlarmPermissionGranted = exactAlarmPermissionGranted,
+            dailyReminderChannelEnabled = dailyReminderChannelEnabled,
+        ),
         swatch = if (dailyReminderSettings.enabled) Amber else Muted,
         onClick = onDailyReminderClick,
     )
@@ -1427,8 +1461,14 @@ private fun ThemeSettingsMenu(
 private fun DailyReminderSettingsMenu(
     settings: DailyReminderSettings,
     notificationPermissionGranted: Boolean,
+    exactAlarmPermissionGranted: Boolean,
+    batteryOptimizationIgnored: Boolean,
+    dailyReminderChannelEnabled: Boolean,
     onSettingsChanged: (DailyReminderSettings) -> Unit,
     onRequestNotificationPermission: () -> Unit,
+    onRequestExactAlarmPermission: () -> Unit,
+    onRequestBatteryOptimization: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
     var timeLabel by remember(settings) { mutableStateOf(settings.timeLabel) }
@@ -1486,23 +1526,30 @@ private fun DailyReminderSettingsMenu(
         value = "仅显示今天未过期事项",
         leadingColor = Accent,
     )
-    if (!notificationPermissionGranted) {
-        SettingsInfoRow(
-            label = "通知权限",
-            value = "需要开启后才能弹出提醒",
-            leadingColor = Danger,
-        )
-        Button(
-            onClick = hapticClick(onClick = onRequestNotificationPermission),
-            colors = ButtonDefaults.buttonColors(containerColor = Ink),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-        ) {
-            Text("开启通知权限", color = readableOn(Ink), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        }
-    }
+    SettingsInfoRow(
+        label = "通知权限",
+        value = if (notificationPermissionGranted) "已开启" else "需要开启",
+        leadingColor = if (notificationPermissionGranted) Success else Danger,
+        onClick = if (notificationPermissionGranted) null else onRequestNotificationPermission,
+    )
+    SettingsInfoRow(
+        label = "准时提醒",
+        value = if (exactAlarmPermissionGranted) "闹钟级" else "需要允许",
+        leadingColor = if (exactAlarmPermissionGranted) Success else Danger,
+        onClick = if (exactAlarmPermissionGranted) null else onRequestExactAlarmPermission,
+    )
+    SettingsInfoRow(
+        label = "通知频道",
+        value = if (dailyReminderChannelEnabled) "正常" else "已关闭",
+        leadingColor = if (dailyReminderChannelEnabled) Success else Danger,
+        onClick = if (dailyReminderChannelEnabled) null else onOpenNotificationSettings,
+    )
+    SettingsInfoRow(
+        label = "后台限制",
+        value = if (batteryOptimizationIgnored) "已放行" else "建议放行",
+        leadingColor = if (batteryOptimizationIgnored) Success else Amber,
+        onClick = if (batteryOptimizationIgnored) null else onRequestBatteryOptimization,
+    )
 }
 
 @Composable
@@ -1812,10 +1859,16 @@ private fun AppThemeMode.swatchColor(): Color = when (this) {
     AppThemeMode.FogBlue -> Color(0xFF5F7E9B)
 }
 
-private fun DailyReminderSettings.reminderDetail(notificationPermissionGranted: Boolean): String {
+private fun DailyReminderSettings.reminderDetail(
+    notificationPermissionGranted: Boolean,
+    exactAlarmPermissionGranted: Boolean,
+    dailyReminderChannelEnabled: Boolean,
+): String {
     return when {
         !enabled -> "关闭"
         !notificationPermissionGranted -> "需要通知权限"
+        !exactAlarmPermissionGranted -> "需要准时提醒权限"
+        !dailyReminderChannelEnabled -> "通知频道已关闭"
         else -> timeLabel
     }
 }

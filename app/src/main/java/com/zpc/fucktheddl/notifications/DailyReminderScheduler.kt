@@ -4,6 +4,7 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
@@ -11,6 +12,11 @@ class DailyReminderScheduler(
     context: Context,
     private val zoneId: ZoneId = ZoneId.of("Asia/Shanghai"),
 ) {
+    enum class AlarmMode {
+        ExactWhileIdle,
+        AllowWhileIdle,
+    }
+
     private val appContext = context.applicationContext
     private val alarmManager = appContext.getSystemService(AlarmManager::class.java)
 
@@ -25,15 +31,38 @@ class DailyReminderScheduler(
             minute = settings.minute,
             zoneId = zoneId,
         )
-        alarmManager.setAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            triggerAt,
-            createPendingIntent(PendingIntent.FLAG_UPDATE_CURRENT),
-        )
+        schedule(triggerAt, createPendingIntent(PendingIntent.FLAG_UPDATE_CURRENT))
     }
 
     fun cancel() {
         alarmManager.cancel(findPendingIntent() ?: return)
+    }
+
+    fun canScheduleExactAlarms(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+    }
+
+    fun currentAlarmMode(): AlarmMode {
+        return alarmMode(canScheduleExactAlarms())
+    }
+
+    private fun schedule(triggerAt: Long, pendingIntent: PendingIntent) {
+        if (currentAlarmMode() == AlarmMode.ExactWhileIdle) {
+            runCatching {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pendingIntent,
+                )
+            }.onSuccess {
+                return
+            }
+        }
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            triggerAt,
+            pendingIntent,
+        )
     }
 
     private fun createPendingIntent(extraFlags: Int): PendingIntent {
@@ -58,6 +87,10 @@ class DailyReminderScheduler(
 
     companion object {
         private const val RequestCode = 7020
+
+        fun alarmMode(canScheduleExactAlarms: Boolean): AlarmMode {
+            return if (canScheduleExactAlarms) AlarmMode.ExactWhileIdle else AlarmMode.AllowWhileIdle
+        }
 
         fun nextTriggerMillis(
             now: ZonedDateTime,

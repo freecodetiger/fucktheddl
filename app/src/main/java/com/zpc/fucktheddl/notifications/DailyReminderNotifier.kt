@@ -41,7 +41,7 @@ class DailyReminderNotifier(
         NotificationManagerCompat.from(context).notify(NotificationId, notification)
     }
 
-    private fun ensureChannel() {
+    fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             ChannelId,
@@ -58,8 +58,15 @@ class DailyReminderNotifier(
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 
-    private companion object {
+    companion object {
         const val ChannelId = "daily_reminder"
         const val NotificationId = 7021
+
+        fun isChannelEnabled(context: Context): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true
+            val channel = context.getSystemService(NotificationManager::class.java)
+                .getNotificationChannel(ChannelId)
+            return channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE
+        }
     }
 }
